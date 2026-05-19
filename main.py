@@ -88,9 +88,16 @@ def build_handler(api):
             path = urlparse(self.path).path
             if path == "/" or path == "":
                 path = "/index.html"
-            # Serve files from web/ folder
-            safe = os.path.normpath(path.lstrip("/")).replace("..", "")
-            full = os.path.join(web_root, safe)
+            # Serve files from web/ folder. Resolve to an absolute path and
+            # confirm it sits inside web_root (defense against any path
+            # traversal trickery — e.g. drive letters on Windows).
+            safe = os.path.normpath(path.lstrip("/")).lstrip(os.sep).lstrip("/")
+            full = os.path.abspath(os.path.join(web_root, safe))
+            web_root_abs = os.path.abspath(web_root)
+            if (full != web_root_abs and
+                not full.startswith(web_root_abs + os.sep)):
+                self._send(404, "Not found")
+                return
             if os.path.isfile(full):
                 ext = os.path.splitext(full)[1].lower()
                 ctype = CONTENT_TYPES.get(ext, "application/octet-stream")
@@ -109,14 +116,18 @@ def build_handler(api):
                 self._send(404, f"Not found: {path}")
 
         def do_POST(self):
-            _touch()
             path = urlparse(self.path).path
             # All POSTs must carry the per-session token. Protects against
             # cross-site requests from other websites you may visit while
             # the app is open, and against random other local processes.
-            if self.headers.get("X-Session-Token", "") != SESSION_TOKEN:
+            # secrets.compare_digest avoids timing leaks. Auth check runs
+            # BEFORE _touch() so an unauthenticated request cannot keep the
+            # server alive indefinitely.
+            sent = self.headers.get("X-Session-Token", "")
+            if not secrets.compare_digest(sent, SESSION_TOKEN):
                 self._send(403, "Forbidden")
                 return
+            _touch()
             # Heartbeat: page is still open, keep server alive
             if path == "/heartbeat":
                 self._send(200, b"ok", "text/plain")

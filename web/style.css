@@ -24,7 +24,7 @@
   --radius: 10px;
   --shadow: 0 1px 4px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.04);
   --shadow-lg: 0 8px 32px rgba(0,0,0,0.16);
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Nirmala UI', Roboto, sans-serif;
 }
 
 /* ── Reset ────────────────────────────────────────────────────── */

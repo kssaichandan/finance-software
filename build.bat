@@ -1,48 +1,48 @@
 @echo off
 echo ============================================
-echo  Finance Tracker — Desktop App Builder
+echo  Finance Tracker -- Desktop App Builder
 echo ============================================
 echo.
 
-echo [1/3] Installing PyInstaller...
+echo [1/2] Installing PyInstaller...
 py -m pip install pyinstaller --quiet
 if errorlevel 1 ( echo ERROR: pip failed & pause & exit /b 1 )
 
-echo [2/3] Building app...
+echo [2/2] Building app...
 py -m PyInstaller ^
   --onedir ^
   --windowed ^
   --name "FinanceTracker" ^
   --add-data "web;web" ^
-  --hidden-import "webview.platforms.edgechromium" ^
-  --hidden-import "webview.platforms.winforms" ^
+  --exclude-module "webview" ^
+  --exclude-module "pywebview" ^
+  --exclude-module "pythonnet" ^
+  --exclude-module "clr" ^
+  --exclude-module "clr_loader" ^
+  --exclude-module "PySide6" ^
+  --exclude-module "PyQt5" ^
+  --exclude-module "PyQt6" ^
   --clean ^
   --noconfirm ^
   main.py
 
 if errorlevel 1 ( echo ERROR: Build failed & pause & exit /b 1 )
 
-echo [3/3] Copying existing database...
-if exist finance.db (
-  copy /Y finance.db dist\FinanceTracker\finance.db
-  echo   Copied finance.db to app folder.
-) else (
-  echo   No finance.db found — app will create a fresh one on first run.
-)
-
 echo.
 echo ============================================
-echo  BUILD SUCCESSFUL!
+echo  BUILD SUCCESSFUL
 echo ============================================
 echo.
 echo  Your app is ready at:
 echo  dist\FinanceTracker\FinanceTracker.exe
 echo.
-echo  To install: copy the entire dist\FinanceTracker
-echo  folder anywhere you like and double-click
-echo  FinanceTracker.exe to launch.
+echo  To distribute:
+echo    1. Zip the entire dist\FinanceTracker folder.
+echo    2. Recipient extracts the zip and runs FinanceTracker.exe.
+echo    3. A fresh empty finance.db is created on first run.
 echo.
-echo  Your data (finance.db) stays in the same
-echo  folder as the .exe — back it up regularly.
+echo  NOTE: this script does NOT copy your local finance.db into
+echo  the build. Distribute clean builds only. Your borrower data
+echo  stays where it currently is.
 echo.
 pause

@@ -1,4 +1,5 @@
 """Domain logic: overdue calculation, loan summaries."""
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime
 import db
@@ -72,7 +73,13 @@ class LoanSummary:
         return "On time"
 
 
-def compute_summary(borrower_row, today: date | None = None) -> LoanSummary:
+def compute_summary(borrower_row, today: date | None = None,
+                    pay_sums: dict | None = None,
+                    pen_sums: dict | None = None,
+                    last_pays: dict | None = None) -> LoanSummary:
+    """Compute a loan summary. If pay_sums/pen_sums/last_pays dicts are passed,
+    use them instead of per-borrower DB queries — used by all_summaries() to
+    avoid an N+1 pattern across many borrowers."""
     if today is None:
         today = date.today()
 
@@ -88,8 +95,11 @@ def compute_summary(borrower_row, today: date | None = None) -> LoanSummary:
     effective_rate = interest_rate * (period / 12.0)
     total_payable = loan_amount + (loan_amount * effective_rate / 100.0)
 
-    total_paid = db.sum_payments(b["id"])
-    total_penalties = db.sum_penalties(b["id"])
+    bid = b["id"]
+    total_paid = pay_sums[bid] if pay_sums is not None and bid in pay_sums else (
+        0.0 if pay_sums is not None else db.sum_payments(bid))
+    total_penalties = pen_sums[bid] if pen_sums is not None and bid in pen_sums else (
+        0.0 if pen_sums is not None else db.sum_penalties(bid))
     remaining = max(0.0, total_payable - total_paid)
 
     elapsed = months_elapsed(loan_date, today)
@@ -129,7 +139,8 @@ def compute_summary(borrower_row, today: date | None = None) -> LoanSummary:
         days_overdue=days_overdue,
         months_elapsed=elapsed,
         expected_installments=expected_installments,
-        last_payment_date=db.last_payment_date(b["id"]),
+        last_payment_date=(last_pays.get(bid) if last_pays is not None
+                           else db.last_payment_date(bid)),
         closed=closed,
         book_ref=b["book_ref"] or "",
     )
@@ -140,15 +151,17 @@ def _add_months(d: date, n: int) -> date:
     month = d.month - 1 + n
     year = d.year + month // 12
     month = month % 12 + 1
-    # clamp day to month length
-    from calendar import monthrange
     day = min(d.day, monthrange(year, month)[1])
     return date(year, month, day)
 
 
 def all_summaries(today: date | None = None) -> list[LoanSummary]:
     rows = db.list_borrowers(include_closed=True)
-    return [compute_summary(r, today) for r in rows]
+    # Pre-fetch aggregates ONCE for all borrowers (was N+1 before).
+    pay_sums = db.all_payment_sums()
+    pen_sums = db.all_penalty_sums()
+    last_pays = db.all_last_payment_dates()
+    return [compute_summary(r, today, pay_sums, pen_sums, last_pays) for r in rows]
 
 
 def due_soon(days: int = 7, today: date | None = None) -> list[dict]:

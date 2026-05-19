@@ -293,10 +293,12 @@ class API:
     # ---- CSV Export ------------------------------------------------------
 
     def export_csv(self) -> dict:
-        today = date.today().strftime("%Y%m%d")
+        # Timestamp suffix so two exports on the same day do not overwrite.
+        from datetime import datetime as _dt
+        stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
         downloads = Path(os.path.expanduser("~")) / "Downloads"
         downloads.mkdir(parents=True, exist_ok=True)
-        path = str(downloads / f"overdue_{today}.csv")
+        path = str(downloads / f"overdue_{stamp}.csv")
         try:
             summaries = models.all_summaries()
             overdue = [s for s in summaries if s.is_overdue]
@@ -311,7 +313,7 @@ class API:
                 for s in overdue:
                     b = db.get_borrower(s.borrower_id)
                     w.writerow([
-                        s.name, s.phone, (b["phone2"] or "") if "phone2" in b.keys() else "",
+                        s.name, s.phone, b["phone2"] or "",
                         s.vehicle_no,
                         s.loan_date.strftime("%d-%m-%y"),
                         s.days_overdue, int(round(s.overdue_amount)),
@@ -319,7 +321,7 @@ class API:
                         s.last_payment_date or "",
                         b["address"] or "", b["guarantor_name"] or "",
                         b["guarantor_phone"] or "",
-                        (b["guarantor_phone2"] or "") if "guarantor_phone2" in b.keys() else "",
+                        b["guarantor_phone2"] or "",
                     ])
             return {"success": True, "path": path, "count": len(overdue)}
         except OSError as e:

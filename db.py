@@ -14,6 +14,31 @@ def _db_path() -> Path:
 DB_PATH = _db_path()
 
 
+# Whitelists of columns allowed in dynamically-built INSERT/UPDATE statements.
+# Without these, an attacker who already has the session token could inject
+# arbitrary column names via the dict keys. Defense-in-depth.
+_BORROWER_COLS = frozenset({
+    "name", "father_name", "address", "phone", "phone2",
+    "guarantor_name", "guarantor_phone", "guarantor_phone2", "guarantor_address",
+    "vehicle_type", "vehicle_no", "engine_no", "chassis_no", "key_no", "serial_no",
+    "book_ref", "showroom",
+    "loan_amount", "interest_rate", "period_months", "installment_amount",
+    "loan_date", "notes", "closed",
+})
+_PAYMENT_COLS = frozenset({
+    "payment_date", "receipt_no", "amount", "installment_label", "notes",
+})
+_PENALTY_COLS = frozenset({
+    "charge_date", "receipt_no", "amount", "notes",
+})
+
+
+def _validate_cols(data: dict, allowed: frozenset, table: str) -> None:
+    bad = [k for k in data.keys() if k not in allowed]
+    if bad:
+        raise ValueError(f"Disallowed column(s) for {table}: {bad}")
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS borrowers (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,6 +165,7 @@ def payment_receipt_exists(receipt_no: str, exclude_id: int | None = None) -> bo
 
 
 def add_borrower(data: dict) -> int:
+    _validate_cols(data, _BORROWER_COLS, "borrowers")
     cols = ", ".join(data.keys())
     placeholders = ", ".join(["?"] * len(data))
     with connect() as conn:
@@ -151,6 +177,7 @@ def add_borrower(data: dict) -> int:
 
 
 def update_borrower(borrower_id: int, data: dict) -> None:
+    _validate_cols(data, _BORROWER_COLS, "borrowers")
     assignments = ", ".join(f"{k} = ?" for k in data.keys())
     with connect() as conn:
         conn.execute(
@@ -234,12 +261,43 @@ def sum_penalties(borrower_id: int) -> float:
         return float(row["total"])
 
 
+def all_payment_sums() -> dict[int, float]:
+    """Return {borrower_id: total_paid} in one query. Avoids N+1 in summaries."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT borrower_id, COALESCE(SUM(amount), 0) AS total "
+            "FROM payments GROUP BY borrower_id"
+        ).fetchall()
+        return {r["borrower_id"]: float(r["total"]) for r in rows}
+
+
+def all_penalty_sums() -> dict[int, float]:
+    """Return {borrower_id: total_penalties} in one query."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT borrower_id, COALESCE(SUM(amount), 0) AS total "
+            "FROM penalties GROUP BY borrower_id"
+        ).fetchall()
+        return {r["borrower_id"]: float(r["total"]) for r in rows}
+
+
+def all_last_payment_dates() -> dict[int, str]:
+    """Return {borrower_id: max(payment_date)} in one query."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT borrower_id, MAX(payment_date) AS d "
+            "FROM payments GROUP BY borrower_id"
+        ).fetchall()
+        return {r["borrower_id"]: r["d"] for r in rows if r["d"] is not None}
+
+
 def delete_payment(payment_id: int) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
 
 
 def update_payment(payment_id: int, data: dict) -> None:
+    _validate_cols(data, _PAYMENT_COLS, "payments")
     assignments = ", ".join(f"{k} = ?" for k in data.keys())
     with connect() as conn:
         conn.execute(
@@ -254,6 +312,7 @@ def delete_penalty(penalty_id: int) -> None:
 
 
 def update_penalty(penalty_id: int, data: dict) -> None:
+    _validate_cols(data, _PENALTY_COLS, "penalties")
     assignments = ", ".join(f"{k} = ?" for k in data.keys())
     with connect() as conn:
         conn.execute(
@@ -269,16 +328,18 @@ def delete_borrower(borrower_id: int) -> None:
 
 
 def distinct_values(column: str) -> list[str]:
-    """Return distinct non-empty values from a borrowers column, for autocomplete."""
+    """Return distinct non-empty values from a borrowers column, for autocomplete.
+    Whitespace-only and trimmed-duplicate values are merged (e.g. 'Mumbai' and
+    'Mumbai ' count as one)."""
     allowed = {"address", "guarantor_address", "vehicle_type", "showroom",
                "father_name", "guarantor_name"}
     if column not in allowed:
         return []
     with connect() as conn:
         rows = conn.execute(
-            f"SELECT DISTINCT {column} AS v FROM borrowers "
+            f"SELECT DISTINCT TRIM({column}) AS v FROM borrowers "
             f"WHERE {column} IS NOT NULL AND TRIM({column}) <> '' "
-            f"ORDER BY {column} COLLATE NOCASE"
+            f"ORDER BY v COLLATE NOCASE"
         ).fetchall()
         return [r["v"] for r in rows]
 
