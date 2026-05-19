@@ -83,8 +83,10 @@ def compute_summary(borrower_row, today: date | None = None) -> LoanSummary:
     period = int(b["period_months"])
     installment = float(b["installment_amount"])
 
-    # Flat interest: total payable = principal + (principal * rate%)
-    total_payable = loan_amount + (loan_amount * interest_rate / 100.0)
+    # Annual rate prorated over loan months:
+    # total payable = principal × (1 + (rate × months/12) / 100)
+    effective_rate = interest_rate * (period / 12.0)
+    total_payable = loan_amount + (loan_amount * effective_rate / 100.0)
 
     total_paid = db.sum_payments(b["id"])
     total_penalties = db.sum_penalties(b["id"])

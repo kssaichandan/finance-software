@@ -566,10 +566,11 @@ function renderAddBorrower(borrower = null) {
               oninput="recalcInstallment()" />
           </div>
           <div class="form-group">
-            <label>Interest Rate (flat %) <span class="req">*</span></label>
+            <label>Interest Rate (% per year) <span class="req">*</span></label>
             <input class="form-control" name="interest_rate" type="number" min="0" max="100" step="0.1" required
               value="${b.interest_rate || 24}" placeholder="e.g. 24"
               oninput="recalcInstallment()" />
+            <span class="form-hint">Annual rate, prorated by loan months.</span>
           </div>
           <div class="form-group">
             <label>Period (months) <span class="req">*</span></label>
@@ -635,7 +636,9 @@ function recalcInstallment() {
   const principal = parseFloat(document.querySelector('[name=loan_amount]')?.value) || 0;
   const rate = parseFloat(document.querySelector('[name=interest_rate]')?.value) || 0;
   const period = parseInt(document.querySelector('[name=period_months]')?.value) || 1;
-  const total = principal + (principal * rate / 100);
+  // Rate is annual (per year). Prorate over the loan period.
+  const effectiveRate = rate * (period / 12);
+  const total = principal + (principal * effectiveRate / 100);
   const el = document.getElementById('total-payable-display');
   const ins = document.getElementById('installment-field');
   if (el) el.textContent = money(total);

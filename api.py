@@ -244,7 +244,8 @@ class API:
 
         total_principal = sum(float(r["loan_amount"]) for r in rows)
         total_payable = sum(
-            float(r["loan_amount"]) * (1 + float(r["interest_rate"]) / 100)
+            float(r["loan_amount"]) *
+            (1 + (float(r["interest_rate"]) * float(r["period_months"]) / 12.0) / 100.0)
             for r in rows
         )
 

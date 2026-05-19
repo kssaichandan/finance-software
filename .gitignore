@@ -6,6 +6,9 @@ dist/
 build/
 *.spec
 
+# Release zip artifacts — uploaded to GitHub Releases, no need to commit
+FinanceTracker-v*.zip
+
 # Python cache
 __pycache__/
 *.pyc
