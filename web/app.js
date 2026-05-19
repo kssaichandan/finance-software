@@ -6,6 +6,8 @@ let searchQuery = '';
 let showClosed = false;
 let statusFilter = 'all';
 let pickDate = '';
+let _viewDirty = false;   // set by mutating ops; closeModal refreshes only if true
+let _formDirty = false;   // set by typing in a form; Cancel warns only if true
 
 // ── Utilities ────────────────────────────────────────────────────
 function money(v) {
@@ -78,6 +80,12 @@ function parseUserDate(s) {
   return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 }
 
+// Live validation for date text inputs — red border the moment the value is invalid.
+function validateDateInput(el) {
+  const ok = !el.value.trim() || parseUserDate(el.value) !== null;
+  el.classList.toggle('input-invalid', !ok);
+}
+
 function loading(show) {
   document.getElementById('loader').classList.toggle('hidden', !show);
 }
@@ -98,7 +106,10 @@ async function api(method, ...args) {
   try {
     const res = await fetch('/api/' + method, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Token': window.SESSION_TOKEN || '',
+      },
       body: JSON.stringify(args),
     });
     if (!res.ok) {
@@ -558,6 +569,7 @@ function renderAddBorrower(borrower = null) {
             <label>Loan Date <span class="req">*</span></label>
             <input class="form-control" name="loan_date" type="text" required maxlength="10"
               placeholder="dd-mm-yy" inputmode="numeric"
+              oninput="validateDateInput(this)"
               value="${esc(fmtDate(b.loan_date)) || todayDDMMYY()}" />
             <span class="form-hint">Format: dd-mm-yy (e.g. 19-05-26)</span>
           </div>
@@ -604,7 +616,7 @@ function renderAddBorrower(borrower = null) {
         <button type="submit" class="btn btn-primary" id="save-btn">
           ${isEdit ? '💾 Save Changes' : '✅ Create Loan'}
         </button>
-        <button type="button" class="btn btn-outline" onclick="navigate('${isEdit ? 'borrowers' : 'borrowers'}')">Cancel</button>
+        <button type="button" class="btn btn-outline" onclick="cancelBorrowerForm()">Cancel</button>
       </div>
 
       <datalist id="dl-address"></datalist>
@@ -618,6 +630,16 @@ function renderAddBorrower(borrower = null) {
 
   recalcInstallment();
   loadSuggestions();
+  // Reset and start tracking edits — Cancel will warn if anything's been typed.
+  _formDirty = false;
+  document.getElementById('borrower-form').addEventListener('input',
+    () => { _formDirty = true; }, { once: true });
+}
+
+function cancelBorrowerForm() {
+  if (_formDirty && !confirm('Discard unsaved changes?')) return;
+  _formDirty = false;
+  navigate('borrowers');
 }
 
 async function loadSuggestions() {
@@ -674,6 +696,7 @@ async function submitBorrower(e, existingId) {
   btn.disabled = false; btn.textContent = existingId ? '💾 Save Changes' : '✅ Create Loan';
 
   if (result.success) {
+    _formDirty = false;
     toast(existingId ? 'Borrower updated.' : 'Loan created successfully!', 'success');
     navigate('borrowers');
   } else {
@@ -733,7 +756,7 @@ async function showDetail(borrowerId) {
         <div class="detail-name">${esc(b.name)}</div>
         <div class="detail-meta">
           ${b.book_ref ? `<span class="book-ref-tag" style="font-size:13px">📒 ${esc(b.book_ref)}</span>` : ''}
-          ${b.vehicle_no ? `<span>🏍 ${esc(b.vehicle_no)}</span>` : ''}
+          ${b.vehicle_no ? `<span>${esc(b.vehicle_no)}</span>` : ''}
           ${b.phone ? `<span>📞 ${esc(b.phone)}${b.phone2 ? `, ${esc(b.phone2)}` : ''}</span>` : ''}
           ${b.serial_no ? `<span>S.No: ${esc(b.serial_no)}</span>` : ''}
           <span>${badge(s.status_label)}</span>
@@ -840,7 +863,8 @@ function showAddPayment(borrowerId) {
           <div class="form-group">
             <label>Payment Date <span class="req">*</span></label>
             <input class="form-control" name="payment_date" type="text" required maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric" value="${today}" />
+              placeholder="dd-mm-yy" inputmode="numeric"
+              oninput="validateDateInput(this)" value="${today}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -876,7 +900,7 @@ async function submitPayment(e, borrowerId) {
   if (!iso) { toast('Payment Date invalid. Use dd-mm-yy.', 'error'); return; }
   data.payment_date = iso;
   const result = await api('add_payment', data);
-  if (result.success) { toast('Payment saved!', 'success'); showDetail(borrowerId); }
+  if (result.success) { _viewDirty = true; toast('Payment saved!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + result.error, 'error');
 }
 
@@ -893,7 +917,8 @@ function showAddPenalty(borrowerId) {
           <div class="form-group">
             <label>Charge Date <span class="req">*</span></label>
             <input class="form-control" name="charge_date" type="text" required maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric" value="${today}" />
+              placeholder="dd-mm-yy" inputmode="numeric"
+              oninput="validateDateInput(this)" value="${today}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -925,7 +950,7 @@ async function submitPenalty(e, borrowerId) {
   if (!iso) { toast('Charge Date invalid. Use dd-mm-yy.', 'error'); return; }
   data.charge_date = iso;
   const result = await api('add_penalty', data);
-  if (result.success) { toast('Penalty saved!', 'success'); showDetail(borrowerId); }
+  if (result.success) { _viewDirty = true; toast('Penalty saved!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + result.error, 'error');
 }
 
@@ -933,14 +958,14 @@ async function submitPenalty(e, borrowerId) {
 async function deletePayment(paymentId, borrowerId) {
   if (!confirm('Delete this payment? This cannot be undone.')) return;
   const r = await api('delete_payment', paymentId);
-  if (r.success) { toast('Payment deleted.', 'success'); showDetail(borrowerId); }
+  if (r.success) { _viewDirty = true; toast('Payment deleted.', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + r.error, 'error');
 }
 
 async function deletePenalty(penaltyId, borrowerId) {
   if (!confirm('Delete this penalty? This cannot be undone.')) return;
   const r = await api('delete_penalty', penaltyId);
-  if (r.success) { toast('Penalty deleted.', 'success'); showDetail(borrowerId); }
+  if (r.success) { _viewDirty = true; toast('Penalty deleted.', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + r.error, 'error');
 }
 
@@ -960,7 +985,8 @@ async function showEditPayment(paymentId, borrowerId) {
           <div class="form-group">
             <label>Payment Date <span class="req">*</span></label>
             <input class="form-control" name="payment_date" type="text" required maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric" value="${esc(fmtDate(p.payment_date))}" />
+              placeholder="dd-mm-yy" inputmode="numeric"
+              oninput="validateDateInput(this)" value="${esc(fmtDate(p.payment_date))}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -995,7 +1021,7 @@ async function submitEditPayment(e, paymentId, borrowerId) {
   if (!iso) { toast('Payment Date invalid. Use dd-mm-yy.', 'error'); return; }
   data.payment_date = iso;
   const r = await api('update_payment', paymentId, data);
-  if (r.success) { toast('Payment updated!', 'success'); showDetail(borrowerId); }
+  if (r.success) { _viewDirty = true; toast('Payment updated!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + r.error, 'error');
 }
 
@@ -1014,7 +1040,8 @@ async function showEditPenalty(penaltyId, borrowerId) {
           <div class="form-group">
             <label>Charge Date <span class="req">*</span></label>
             <input class="form-control" name="charge_date" type="text" required maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric" value="${esc(fmtDate(p.charge_date))}" />
+              placeholder="dd-mm-yy" inputmode="numeric"
+              oninput="validateDateInput(this)" value="${esc(fmtDate(p.charge_date))}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -1045,7 +1072,7 @@ async function submitEditPenalty(e, penaltyId, borrowerId) {
   if (!iso) { toast('Charge Date invalid. Use dd-mm-yy.', 'error'); return; }
   data.charge_date = iso;
   const r = await api('update_penalty', penaltyId, data);
-  if (r.success) { toast('Penalty updated!', 'success'); showDetail(borrowerId); }
+  if (r.success) { _viewDirty = true; toast('Penalty updated!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + r.error, 'error');
 }
 
@@ -1053,13 +1080,13 @@ async function submitEditPenalty(e, penaltyId, borrowerId) {
 async function confirmCloseLoan(borrowerId) {
   if (!confirm('Mark this loan as fully closed? This removes it from the overdue list.')) return;
   const r = await api('close_loan', borrowerId);
-  if (r.success) { toast('Loan marked as closed.', 'success'); closeModal(); refreshCurrentView(); }
+  if (r.success) { _viewDirty = true; toast('Loan marked as closed.', 'success'); closeModal(); }
   else toast('Error: ' + r.error, 'error');
 }
 
 async function reopenLoan(borrowerId) {
   const r = await api('reopen_loan', borrowerId);
-  if (r.success) { toast('Loan re-opened.', 'success'); showDetail(borrowerId); refreshCurrentView(); }
+  if (r.success) { _viewDirty = true; toast('Loan re-opened.', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + r.error, 'error');
 }
 
@@ -1075,9 +1102,9 @@ async function confirmDeleteBorrower(btn) {
   if (!confirm(`Really delete "${name}"? Last chance — click OK to confirm.`)) return;
   const r = await api('delete_borrower', borrowerId);
   if (r.success) {
+    _viewDirty = true;
     toast(`${name} deleted permanently.`, 'success');
     closeModal();
-    refreshCurrentView();
   } else {
     toast('Error: ' + r.error, 'error');
   }
@@ -1111,7 +1138,7 @@ function openModal() {
 function closeModal() {
   document.getElementById('modal-overlay').classList.add('hidden');
   document.getElementById('modal-inner').innerHTML = '';
-  refreshCurrentView();
+  if (_viewDirty) { _viewDirty = false; refreshCurrentView(); }
 }
 
 function handleOverlayClick(e) {
@@ -1279,7 +1306,11 @@ window.addEventListener('DOMContentLoaded', () => navigate('dashboard'));
 // If these stop arriving for ~20s, the server shuts itself down,
 // so closing the window actually closes the app (no ghost processes).
 function _heartbeat() {
-  fetch('/heartbeat', { method: 'POST', keepalive: true }).catch(() => {});
+  fetch('/heartbeat', {
+    method: 'POST',
+    keepalive: true,
+    headers: { 'X-Session-Token': window.SESSION_TOKEN || '' },
+  }).catch(() => {});
 }
 _heartbeat();
 setInterval(_heartbeat, 5000);

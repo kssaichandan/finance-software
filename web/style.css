@@ -147,6 +147,8 @@ table.data-table { width: 100%; border-collapse: collapse; }
 .form-group label .req { color: var(--danger); margin-left: 2px; }
 .form-control { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; color: var(--text); outline: none; transition: border-color 0.15s, box-shadow 0.15s; background: white; width: 100%; }
 .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+.form-control.input-invalid { border-color: var(--danger); background: #fef2f2; }
+.form-control.input-invalid:focus { box-shadow: 0 0 0 3px rgba(220,38,38,0.15); }
 .form-control::placeholder { color: #a1afc0; }
 textarea.form-control { resize: vertical; min-height: 64px; }
 .form-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }

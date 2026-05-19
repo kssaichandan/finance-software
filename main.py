@@ -10,6 +10,7 @@ import sys
 import time
 import json
 import socket
+import secrets
 import threading
 import traceback
 import webbrowser
@@ -23,6 +24,11 @@ from urllib.parse import urlparse
 # IDLE_TIMEOUT seconds (browser window closed), the process exits.
 LAST_ACTIVITY = time.time()
 IDLE_TIMEOUT = 20.0  # seconds
+
+# Fresh per-process random token. Embedded into index.html when served, and
+# required on every API/heartbeat request. Protects against CSRF and against
+# random other processes hitting our local API.
+SESSION_TOKEN = secrets.token_urlsafe(24)
 
 
 def _touch() -> None:
@@ -89,13 +95,28 @@ def build_handler(api):
                 ext = os.path.splitext(full)[1].lower()
                 ctype = CONTENT_TYPES.get(ext, "application/octet-stream")
                 with open(full, "rb") as f:
-                    self._send(200, f.read(), ctype)
+                    body = f.read()
+                # Inject the session token into index.html so the frontend
+                # can attach it to every API request.
+                if ext == ".html":
+                    inject = (
+                        f'<script>window.SESSION_TOKEN = "{SESSION_TOKEN}";'
+                        f'</script></head>'
+                    ).encode("utf-8")
+                    body = body.replace(b"</head>", inject, 1)
+                self._send(200, body, ctype)
             else:
                 self._send(404, f"Not found: {path}")
 
         def do_POST(self):
             _touch()
             path = urlparse(self.path).path
+            # All POSTs must carry the per-session token. Protects against
+            # cross-site requests from other websites you may visit while
+            # the app is open, and against random other local processes.
+            if self.headers.get("X-Session-Token", "") != SESSION_TOKEN:
+                self._send(403, "Forbidden")
+                return
             # Heartbeat: page is still open, keep server alive
             if path == "/heartbeat":
                 self._send(200, b"ok", "text/plain")
