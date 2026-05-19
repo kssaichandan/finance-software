@@ -437,11 +437,14 @@ function renderAddBorrower(borrower = null) {
           </div>
           <div class="form-group">
             <label>S/o (Father's Name)</label>
-            <input class="form-control" name="father_name" value="${esc(b.father_name)}" placeholder="Father's name" />
+            <input class="form-control" name="father_name" list="dl-father_name" autocomplete="off"
+                   value="${esc(b.father_name)}" placeholder="Father's name" />
           </div>
           <div class="form-group form-full">
             <label>Address</label>
-            <textarea class="form-control" name="address" rows="2" placeholder="Village, Post, Taluk…">${esc(b.address)}</textarea>
+            <input class="form-control" name="address" list="dl-address" autocomplete="off"
+                   value="${esc(b.address)}" placeholder="Village, Post, Taluk…" />
+            <span class="form-hint">Type to see previously-used addresses.</span>
           </div>
           <div class="form-group">
             <label>Phone</label>
@@ -455,7 +458,8 @@ function renderAddBorrower(borrower = null) {
         <div class="form-grid">
           <div class="form-group">
             <label>Guarantor Name</label>
-            <input class="form-control" name="guarantor_name" value="${esc(b.guarantor_name)}" placeholder="Name" />
+            <input class="form-control" name="guarantor_name" list="dl-guarantor_name" autocomplete="off"
+                   value="${esc(b.guarantor_name)}" placeholder="Name" />
           </div>
           <div class="form-group">
             <label>Guarantor Phone</label>
@@ -463,7 +467,8 @@ function renderAddBorrower(borrower = null) {
           </div>
           <div class="form-group form-full">
             <label>Guarantor Address</label>
-            <textarea class="form-control" name="guarantor_address" rows="2" placeholder="Guarantor's address">${esc(b.guarantor_address)}</textarea>
+            <input class="form-control" name="guarantor_address" list="dl-guarantor_address" autocomplete="off"
+                   value="${esc(b.guarantor_address)}" placeholder="Guarantor's address" />
           </div>
         </div>
       </div>
@@ -473,7 +478,8 @@ function renderAddBorrower(borrower = null) {
         <div class="form-grid">
           <div class="form-group">
             <label>Vehicle Type</label>
-            <input class="form-control" name="vehicle_type" value="${esc(b.vehicle_type)}" placeholder="e.g. Spl (T), Auto" />
+            <input class="form-control" name="vehicle_type" list="dl-vehicle_type" autocomplete="off"
+                   value="${esc(b.vehicle_type)}" placeholder="e.g. Splendor, Pulsar, Auto" />
           </div>
           <div class="form-group">
             <label>Vehicle Number</label>
@@ -497,7 +503,8 @@ function renderAddBorrower(borrower = null) {
           </div>
           <div class="form-group">
             <label>Show Room</label>
-            <input class="form-control" name="showroom" value="${esc(b.showroom)}" placeholder="Show room name" />
+            <input class="form-control" name="showroom" list="dl-showroom" autocomplete="off"
+                   value="${esc(b.showroom)}" placeholder="Show room name" />
           </div>
         </div>
       </div>
@@ -554,10 +561,32 @@ function renderAddBorrower(borrower = null) {
         </button>
         <button type="button" class="btn btn-outline" onclick="navigate('${isEdit ? 'borrowers' : 'borrowers'}')">Cancel</button>
       </div>
+
+      <datalist id="dl-address"></datalist>
+      <datalist id="dl-guarantor_address"></datalist>
+      <datalist id="dl-vehicle_type"></datalist>
+      <datalist id="dl-showroom"></datalist>
+      <datalist id="dl-father_name"></datalist>
+      <datalist id="dl-guarantor_name"></datalist>
     </form>
   `;
 
   recalcInstallment();
+  loadSuggestions();
+}
+
+async function loadSuggestions() {
+  try {
+    const sug = await api('get_suggestions');
+    for (const field of ['address', 'guarantor_address', 'vehicle_type',
+                         'showroom', 'father_name', 'guarantor_name']) {
+      const dl = document.getElementById('dl-' + field);
+      if (!dl || !sug[field]) continue;
+      dl.innerHTML = sug[field].map(v => `<option value="${esc(v)}"></option>`).join('');
+    }
+  } catch (e) {
+    // Silent — autocomplete is non-critical
+  }
 }
 
 function recalcInstallment() {
@@ -707,6 +736,7 @@ async function showDetail(borrowerId) {
       <button class="btn btn-sm btn-outline" onclick="showPaymentSchedule(${b.id})">📅 Schedule</button>
       <button class="btn btn-sm btn-outline" onclick="closeModal(); navigate('add'); loadEditForm(${b.id})">✏ Edit</button>
       ${closedBtn}
+      <button class="btn btn-sm btn-danger" onclick="confirmDeleteBorrower(${b.id}, ${JSON.stringify(b.name)})">🗑 Delete Borrower</button>
     </div>
 
     <div class="detail-tables">
@@ -958,6 +988,22 @@ async function reopenLoan(borrowerId) {
   const r = await api('reopen_loan', borrowerId);
   if (r.success) { toast('Loan re-opened.', 'success'); showDetail(borrowerId); refreshCurrentView(); }
   else toast('Error: ' + r.error, 'error');
+}
+
+async function confirmDeleteBorrower(borrowerId, name) {
+  const msg = `Permanently delete "${name}"?\n\nThis will also delete ALL their payments and penalties.\nThis CANNOT be undone.\n\nClick OK to delete, Cancel to keep.`;
+  if (!confirm(msg)) return;
+  // Second safety prompt
+  const typed = prompt(`To confirm, type DELETE (in capitals) and click OK:`);
+  if (typed !== 'DELETE') { toast('Delete cancelled.', 'info'); return; }
+  const r = await api('delete_borrower', borrowerId);
+  if (r.success) {
+    toast(`${name} deleted permanently.`, 'success');
+    closeModal();
+    refreshCurrentView();
+  } else {
+    toast('Error: ' + r.error, 'error');
+  }
 }
 
 // ── Edit borrower (from detail modal) ───────────────────────────

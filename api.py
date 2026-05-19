@@ -125,6 +125,24 @@ class API:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def delete_borrower(self, borrower_id: int) -> dict:
+        try:
+            db.delete_borrower(int(borrower_id))
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_suggestions(self) -> dict:
+        """Return distinct previously-entered values per field, for autocomplete."""
+        return {
+            "address":            db.distinct_values("address"),
+            "guarantor_address":  db.distinct_values("guarantor_address"),
+            "vehicle_type":       db.distinct_values("vehicle_type"),
+            "showroom":           db.distinct_values("showroom"),
+            "father_name":        db.distinct_values("father_name"),
+            "guarantor_name":     db.distinct_values("guarantor_name"),
+        }
+
     def close_loan(self, borrower_id: int) -> dict:
         try:
             db.update_borrower(borrower_id, {"closed": 1})

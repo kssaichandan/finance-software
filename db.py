@@ -207,6 +207,27 @@ def update_penalty(penalty_id: int, data: dict) -> None:
         )
 
 
+def delete_borrower(borrower_id: int) -> None:
+    """Delete a borrower and all their payments/penalties (CASCADE via FK)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM borrowers WHERE id = ?", (borrower_id,))
+
+
+def distinct_values(column: str) -> list[str]:
+    """Return distinct non-empty values from a borrowers column, for autocomplete."""
+    allowed = {"address", "guarantor_address", "vehicle_type", "showroom",
+               "father_name", "guarantor_name"}
+    if column not in allowed:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT {column} AS v FROM borrowers "
+            f"WHERE {column} IS NOT NULL AND TRIM({column}) <> '' "
+            f"ORDER BY {column} COLLATE NOCASE"
+        ).fetchall()
+        return [r["v"] for r in rows]
+
+
 def last_payment_date(borrower_id: int) -> str | None:
     with connect() as conn:
         row = conn.execute(
