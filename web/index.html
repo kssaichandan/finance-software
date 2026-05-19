@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Finance Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="app-shell">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-icon">₹</span>
+        <span class="brand-name">Finance<br>Tracker</span>
+      </div>
+      <nav class="sidebar-nav">
+        <a class="nav-item active" data-view="dashboard" onclick="navigate('dashboard')">
+          <span class="nav-icon">📋</span>
+          <span>Dashboard</span>
+        </a>
+        <a class="nav-item" data-view="borrowers" onclick="navigate('borrowers')">
+          <span class="nav-icon">👥</span>
+          <span>Borrowers</span>
+        </a>
+        <a class="nav-item" data-view="add" onclick="navigate('add')">
+          <span class="nav-icon">➕</span>
+          <span>New Loan</span>
+        </a>
+        <a class="nav-item" data-view="portfolio" onclick="navigate('portfolio')">
+          <span class="nav-icon">📈</span>
+          <span>Portfolio</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="sidebar-refresh" onclick="refreshCurrentView()">⟳ Refresh</button>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main-content">
+      <div id="view" class="view-container"></div>
+    </main>
+
+  </div>
+
+  <!-- Modal overlay -->
+  <div id="modal-overlay" class="modal-overlay hidden" onclick="handleOverlayClick(event)">
+    <div id="modal-box" class="modal-box" onclick="event.stopPropagation()">
+      <div id="modal-inner"></div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toasts"></div>
+
+  <!-- Loading spinner -->
+  <div id="loader" class="loader hidden">
+    <div class="spinner"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Database — contains real borrower data, never commit
+finance.db
+
+# PyInstaller build output
+dist/
+build/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Old UI folder
+ui/
