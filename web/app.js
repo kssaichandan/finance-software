@@ -58,6 +58,26 @@ function fmtDate(s) {
   return `${m[3]}-${m[2]}-${m[1].slice(2)}`;
 }
 
+// Today as "dd-mm-yy" for prefilling date inputs.
+function todayDDMMYY() {
+  const t = new Date();
+  const d = String(t.getDate()).padStart(2, '0');
+  const m = String(t.getMonth() + 1).padStart(2, '0');
+  const y = String(t.getFullYear()).slice(2);
+  return `${d}-${m}-${y}`;
+}
+
+// Parse user-typed "dd-mm-yy" / "dd-mm-yyyy" / "dd/mm/yy" → "YYYY-MM-DD" or null.
+function parseUserDate(s) {
+  if (!s) return null;
+  const m = /^\s*(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\s*$/.exec(String(s));
+  if (!m) return null;
+  let d = parseInt(m[1], 10), mo = parseInt(m[2], 10), y = parseInt(m[3], 10);
+  if (y < 100) y += 2000;
+  if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 1900 || y > 2100) return null;
+  return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+
 function loading(show) {
   document.getElementById('loader').classList.toggle('hidden', !show);
 }
@@ -282,8 +302,9 @@ async function renderBorrowers() {
         <option value="due_7days"   ${statusFilter==='due_7days'   ?'selected':''}>Due in 7 Days</option>
         <option value="pick_date"   ${statusFilter==='pick_date'   ?'selected':''}>Pick Date…</option>
       </select>
-      <input type="date" id="pick-date-input" class="form-control pick-date-input"
-        value="${esc(pickDate)}"
+      <input type="text" id="pick-date-input" class="form-control pick-date-input"
+        placeholder="dd-mm-yy" maxlength="10"
+        value="${esc(fmtDate(pickDate))}"
         style="${statusFilter !== 'pick_date' ? 'display:none' : ''}"
         onchange="setPickDate(this.value)" />
       <label class="filter-label" id="closed-toggle"
@@ -403,7 +424,10 @@ function setStatusFilter(val) {
 }
 
 function setPickDate(val) {
-  pickDate = val;
+  // Accept dd-mm-yy from user; internally pickDate is YYYY-MM-DD to compare with next-due dates.
+  const iso = parseUserDate(val);
+  pickDate = iso || '';
+  if (val && !iso) toast('Invalid date. Use dd-mm-yy.', 'error');
   filterBorrowers(searchQuery);
 }
 
@@ -530,8 +554,10 @@ function renderAddBorrower(borrower = null) {
         <div class="form-grid">
           <div class="form-group">
             <label>Loan Date <span class="req">*</span></label>
-            <input class="form-control" name="loan_date" type="date" required
-              value="${esc(b.loan_date) || new Date().toISOString().slice(0,10)}" />
+            <input class="form-control" name="loan_date" type="text" required maxlength="10"
+              placeholder="dd-mm-yy" inputmode="numeric"
+              value="${esc(fmtDate(b.loan_date)) || todayDDMMYY()}" />
+            <span class="form-hint">Format: dd-mm-yy (e.g. 19-05-26)</span>
           </div>
           <div class="form-group">
             <label>Principal Amount (₹) <span class="req">*</span></label>
@@ -624,6 +650,14 @@ async function submitBorrower(e, existingId) {
 
   const data = {};
   new FormData(form).forEach((val, key) => { data[key] = val; });
+
+  const iso = parseUserDate(data.loan_date);
+  if (!iso) {
+    btn.disabled = false; btn.textContent = existingId ? '💾 Save Changes' : '✅ Create Loan';
+    toast('Loan Date is invalid. Use dd-mm-yy (e.g. 19-05-26).', 'error');
+    return;
+  }
+  data.loan_date = iso;
 
   let result;
   if (existingId) {
@@ -788,7 +822,7 @@ function infoRow(key, val) {
 
 // ── Add Payment / Penalty modals ─────────────────────────────────
 function showAddPayment(borrowerId) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayDDMMYY();
   document.getElementById('modal-inner').innerHTML = `
     <div class="mini-modal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -799,7 +833,8 @@ function showAddPayment(borrowerId) {
         <div class="form-grid" style="margin-bottom:16px">
           <div class="form-group">
             <label>Payment Date <span class="req">*</span></label>
-            <input class="form-control" name="payment_date" type="date" required value="${today}" />
+            <input class="form-control" name="payment_date" type="text" required maxlength="10"
+              placeholder="dd-mm-yy" inputmode="numeric" value="${today}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -831,13 +866,16 @@ async function submitPayment(e, borrowerId) {
   const fd = new FormData(e.target);
   const data = { borrower_id: borrowerId };
   fd.forEach((v, k) => { data[k] = v; });
+  const iso = parseUserDate(data.payment_date);
+  if (!iso) { toast('Payment Date invalid. Use dd-mm-yy.', 'error'); return; }
+  data.payment_date = iso;
   const result = await api('add_payment', data);
   if (result.success) { toast('Payment saved!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + result.error, 'error');
 }
 
 function showAddPenalty(borrowerId) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayDDMMYY();
   document.getElementById('modal-inner').innerHTML = `
     <div class="mini-modal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -848,7 +886,8 @@ function showAddPenalty(borrowerId) {
         <div class="form-grid" style="margin-bottom:16px">
           <div class="form-group">
             <label>Charge Date <span class="req">*</span></label>
-            <input class="form-control" name="charge_date" type="date" required value="${today}" />
+            <input class="form-control" name="charge_date" type="text" required maxlength="10"
+              placeholder="dd-mm-yy" inputmode="numeric" value="${today}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -876,6 +915,9 @@ async function submitPenalty(e, borrowerId) {
   const fd = new FormData(e.target);
   const data = { borrower_id: borrowerId };
   fd.forEach((v, k) => { data[k] = v; });
+  const iso = parseUserDate(data.charge_date);
+  if (!iso) { toast('Charge Date invalid. Use dd-mm-yy.', 'error'); return; }
+  data.charge_date = iso;
   const result = await api('add_penalty', data);
   if (result.success) { toast('Penalty saved!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + result.error, 'error');
@@ -911,7 +953,8 @@ async function showEditPayment(paymentId, borrowerId) {
         <div class="form-grid" style="margin-bottom:16px">
           <div class="form-group">
             <label>Payment Date <span class="req">*</span></label>
-            <input class="form-control" name="payment_date" type="date" required value="${esc(p.payment_date)}" />
+            <input class="form-control" name="payment_date" type="text" required maxlength="10"
+              placeholder="dd-mm-yy" inputmode="numeric" value="${esc(fmtDate(p.payment_date))}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -942,6 +985,9 @@ async function submitEditPayment(e, paymentId, borrowerId) {
   e.preventDefault();
   const data = {};
   new FormData(e.target).forEach((v, k) => { data[k] = v; });
+  const iso = parseUserDate(data.payment_date);
+  if (!iso) { toast('Payment Date invalid. Use dd-mm-yy.', 'error'); return; }
+  data.payment_date = iso;
   const r = await api('update_payment', paymentId, data);
   if (r.success) { toast('Payment updated!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + r.error, 'error');
@@ -961,7 +1007,8 @@ async function showEditPenalty(penaltyId, borrowerId) {
         <div class="form-grid" style="margin-bottom:16px">
           <div class="form-group">
             <label>Charge Date <span class="req">*</span></label>
-            <input class="form-control" name="charge_date" type="date" required value="${esc(p.charge_date)}" />
+            <input class="form-control" name="charge_date" type="text" required maxlength="10"
+              placeholder="dd-mm-yy" inputmode="numeric" value="${esc(fmtDate(p.charge_date))}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -988,6 +1035,9 @@ async function submitEditPenalty(e, penaltyId, borrowerId) {
   e.preventDefault();
   const data = {};
   new FormData(e.target).forEach((v, k) => { data[k] = v; });
+  const iso = parseUserDate(data.charge_date);
+  if (!iso) { toast('Charge Date invalid. Use dd-mm-yy.', 'error'); return; }
+  data.charge_date = iso;
   const r = await api('update_penalty', penaltyId, data);
   if (r.success) { toast('Penalty updated!', 'success'); showDetail(borrowerId); }
   else toast('Error: ' + r.error, 'error');
