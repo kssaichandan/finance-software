@@ -753,7 +753,7 @@ async function showDetail(borrowerId) {
       <button class="btn btn-sm btn-outline" onclick="showPaymentSchedule(${b.id})">📅 Schedule</button>
       <button class="btn btn-sm btn-outline" onclick="closeModal(); navigate('add'); loadEditForm(${b.id})">✏ Edit</button>
       ${closedBtn}
-      <button class="btn btn-sm btn-danger" onclick="confirmDeleteBorrower(${b.id}, ${JSON.stringify(b.name)})">🗑 Delete Borrower</button>
+      <button class="btn btn-sm btn-danger" data-bid="${b.id}" data-bname="${esc(b.name)}" onclick="confirmDeleteBorrower(this)">🗑 Delete Borrower</button>
     </div>
 
     <div class="detail-tables">
@@ -1007,12 +1007,16 @@ async function reopenLoan(borrowerId) {
   else toast('Error: ' + r.error, 'error');
 }
 
-async function confirmDeleteBorrower(borrowerId, name) {
-  const msg = `Permanently delete "${name}"?\n\nThis will also delete ALL their payments and penalties.\nThis CANNOT be undone.\n\nClick OK to delete, Cancel to keep.`;
+async function confirmDeleteBorrower(btn) {
+  const borrowerId = parseInt(btn.dataset.bid, 10);
+  const name = btn.dataset.bname || 'this borrower';
+  const msg = `PERMANENTLY DELETE "${name}"?\n\n` +
+              `This will also delete ALL their payments and penalties.\n` +
+              `This CANNOT be undone.\n\n` +
+              `Click OK to delete, Cancel to keep.`;
   if (!confirm(msg)) return;
-  // Second safety prompt
-  const typed = prompt(`To confirm, type DELETE (in capitals) and click OK:`);
-  if (typed !== 'DELETE') { toast('Delete cancelled.', 'info'); return; }
+  // Second safety check
+  if (!confirm(`Really delete "${name}"? Last chance — click OK to confirm.`)) return;
   const r = await api('delete_borrower', borrowerId);
   if (r.success) {
     toast(`${name} deleted permanently.`, 'success');
