@@ -104,11 +104,14 @@ class API:
 
     def add_borrower(self, data: dict) -> dict:
         try:
-            # JS sends numbers as floats/ints, ensure correct types
             data["loan_amount"] = float(data["loan_amount"])
             data["interest_rate"] = float(data["interest_rate"])
             data["period_months"] = int(data["period_months"])
             data["installment_amount"] = float(data["installment_amount"])
+            bref = (data.get("book_ref") or "").strip()
+            if bref and db.book_ref_exists(bref):
+                return {"success": False,
+                        "error": f"Book No / S.No '{bref}' is already used by another borrower."}
             bid = db.add_borrower(data)
             return {"success": True, "id": bid}
         except Exception as e:
@@ -120,6 +123,10 @@ class API:
             data["interest_rate"] = float(data["interest_rate"])
             data["period_months"] = int(data["period_months"])
             data["installment_amount"] = float(data["installment_amount"])
+            bref = (data.get("book_ref") or "").strip()
+            if bref and db.book_ref_exists(bref, exclude_id=int(borrower_id)):
+                return {"success": False,
+                        "error": f"Book No / S.No '{bref}' is already used by another borrower."}
             db.update_borrower(borrower_id, data)
             return {"success": True}
         except Exception as e:
@@ -161,11 +168,15 @@ class API:
 
     def add_payment(self, data: dict) -> dict:
         try:
+            receipt = (data.get("receipt_no") or "").strip()
+            if receipt and db.payment_receipt_exists(receipt):
+                return {"success": False,
+                        "error": f"Receipt No '{receipt}' is already used in another payment."}
             pid = db.add_payment(
                 borrower_id=int(data["borrower_id"]),
                 payment_date=data["payment_date"],
                 amount=float(data["amount"]),
-                receipt_no=data.get("receipt_no", ""),
+                receipt_no=receipt,
                 installment_label=data.get("installment_label", ""),
                 notes=data.get("notes", ""),
             )
@@ -196,6 +207,11 @@ class API:
     def update_payment(self, payment_id: int, data: dict) -> dict:
         try:
             data["amount"] = float(data["amount"])
+            receipt = (data.get("receipt_no") or "").strip()
+            if receipt and db.payment_receipt_exists(receipt, exclude_id=int(payment_id)):
+                return {"success": False,
+                        "error": f"Receipt No '{receipt}' is already used in another payment."}
+            data["receipt_no"] = receipt
             db.update_payment(int(payment_id), data)
             return {"success": True}
         except Exception as e:

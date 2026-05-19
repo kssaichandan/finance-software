@@ -89,6 +89,55 @@ def init_db() -> None:
         if "guarantor_phone2" not in cols:
             conn.execute("ALTER TABLE borrowers ADD COLUMN guarantor_phone2 TEXT DEFAULT ''")
 
+        # Partial unique indexes — non-empty book_ref must be unique across
+        # borrowers, and non-empty receipt_no must be unique within payments.
+        # Wrapped in try/except so existing duplicates in old data do not
+        # block startup; app-level checks will still block new duplicates.
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_book_ref "
+                "ON borrowers(book_ref) "
+                "WHERE book_ref IS NOT NULL AND TRIM(book_ref) != ''"
+            )
+        except sqlite3.Error:
+            pass
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_payment_receipt "
+                "ON payments(receipt_no) "
+                "WHERE receipt_no IS NOT NULL AND TRIM(receipt_no) != ''"
+            )
+        except sqlite3.Error:
+            pass
+
+
+def book_ref_exists(book_ref: str, exclude_id: int | None = None) -> bool:
+    """True if any OTHER borrower already has this non-empty book_ref."""
+    bref = (book_ref or "").strip()
+    if not bref:
+        return False
+    sql = "SELECT 1 FROM borrowers WHERE TRIM(book_ref) = ?"
+    params: list = [bref]
+    if exclude_id is not None:
+        sql += " AND id != ?"
+        params.append(exclude_id)
+    with connect() as conn:
+        return conn.execute(sql, params).fetchone() is not None
+
+
+def payment_receipt_exists(receipt_no: str, exclude_id: int | None = None) -> bool:
+    """True if any OTHER payment already has this non-empty receipt_no."""
+    r = (receipt_no or "").strip()
+    if not r:
+        return False
+    sql = "SELECT 1 FROM payments WHERE TRIM(receipt_no) = ?"
+    params: list = [r]
+    if exclude_id is not None:
+        sql += " AND id != ?"
+        params.append(exclude_id)
+    with connect() as conn:
+        return conn.execute(sql, params).fetchone() is not None
+
 
 def add_borrower(data: dict) -> int:
     cols = ", ".join(data.keys())
