@@ -4,16 +4,70 @@ A Windows desktop app for tracking vehicle finance loans — installment payment
 
 ---
 
-## Download & Install (no Python needed)
+## How to Download and Install
 
-> **One-click install for Windows**
+### Step 1 — Go to Releases
 
-1. Go to the [**Releases**](../../releases/latest) page of this repository.
-2. Download **`FinanceTracker.zip`** from the latest release.
-3. Extract the zip anywhere (e.g. `C:\FinanceTracker\`).
-4. Double-click **`FinanceTracker.exe`** to launch.
+Click here: **[Releases page](../../releases/latest)**
 
-Your data is saved in `finance.db` in the same folder as the `.exe`. Back this file up regularly (copy to a USB drive or cloud folder).
+Or on GitHub, look for the **"Releases"** section on the right side of the page and click the latest one.
+
+---
+
+### Step 2 — Download the zip file
+
+On the Releases page, under **"Assets"**, click **`FinanceTracker-v1.0.zip`** to download it.
+
+> Do NOT click "Source code (zip)" — that is the raw code, not the app.
+
+---
+
+### Step 3 — Extract the zip
+
+1. Find the downloaded zip in your **Downloads** folder
+2. Right-click it → **"Extract All..."**
+3. Choose a permanent location, for example: `C:\FinanceTracker\`
+4. Click **Extract**
+
+> Keep the entire extracted folder together — do not move just the `.exe` out of the folder, it needs all the files next to it.
+
+---
+
+### Step 4 — Run the app
+
+Open the extracted folder and double-click **`FinanceTracker.exe`**.
+
+The first time Windows may show a blue warning:
+> *"Windows protected your PC"*
+
+Click **"More info"** → then **"Run anyway"**. This is normal for apps not published to the Microsoft Store.
+
+---
+
+### Step 5 — Your data
+
+When the app starts for the first time, it automatically creates `finance.db` in the same folder as the `.exe`. This file contains all your borrower data.
+
+**Back it up regularly** — copy `finance.db` to a USB drive or OneDrive.
+
+---
+
+## If the App Crashes or Shows an Error
+
+If the app shows a Python error or crashes:
+
+1. Look for a file called **`error.log`** in the same folder as `FinanceTracker.exe`
+2. Open it with Notepad — it will show the exact error
+3. Share the contents to get help fixing it
+
+**Common fixes:**
+
+| Problem | Fix |
+|---|---|
+| Blue "Windows protected your PC" screen | Click "More info" → "Run anyway" |
+| App opens and immediately closes | Check `error.log` in the same folder |
+| "WebView2" or "Edge" error | Install [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) |
+| Missing DLL error | Install [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
 
 ---
 
@@ -43,6 +97,16 @@ Penalties are tracked separately and do not affect the overdue calculation.
 
 ---
 
+## Backup Your Data
+
+Your data lives entirely in `finance.db` next to the `.exe`. To back it up:
+- Copy it to a **USB drive**, or
+- Copy it to **OneDrive / Google Drive**
+
+To restore on a new PC: copy your `finance.db` into the same folder as `FinanceTracker.exe` before launching.
+
+---
+
 ## For Developers — Running from Source
 
 **Requirements:** Python 3.10+, Windows
@@ -53,9 +117,6 @@ py -m pip install -r requirements.txt
 
 # Run the app
 py main.py
-
-# Optional: seed demo data
-py seed_sample.py
 ```
 
 **Build a standalone .exe:**
@@ -64,37 +125,4 @@ py seed_sample.py
 build.bat
 ```
 
-The built app will be in `dist\FinanceTracker\`. Copy that entire folder anywhere and run `FinanceTracker.exe`.
-
----
-
-## File Layout
-
-```
-finance software/
-├── main.py          # Entry point
-├── db.py            # SQLite schema and helpers
-├── models.py        # Loan/overdue calculation logic
-├── api.py           # JS-to-Python bridge (pywebview)
-├── build.bat        # One-click build script
-├── requirements.txt
-├── seed_sample.py   # Loads one demo borrower
-├── seed_edge.py     # Loads edge-case demo data for testing
-├── seed_fake.py     # Loads 50 fake borrowers for testing
-└── web/
-    ├── index.html   # App shell
-    ├── style.css    # Styles
-    └── app.js       # All UI logic
-```
-
-> `finance.db` is created on first run and is excluded from git — it contains real borrower data.
-
----
-
-## Backup
-
-Your data lives entirely in `finance.db`. To back it up:
-- Copy it to a USB drive, or
-- Copy it to OneDrive / Google Drive
-
-To restore, place the `.db` file back in the same folder as `FinanceTracker.exe`.
+The built app will be in `dist\FinanceTracker\`. Zip that entire folder and distribute it.
