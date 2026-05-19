@@ -150,6 +150,13 @@ table.data-table { width: 100%; border-collapse: collapse; }
 .form-control.input-invalid { border-color: var(--danger); background: #fef2f2; }
 .form-control.input-invalid:focus { box-shadow: 0 0 0 3px rgba(220,38,38,0.15); }
 .form-control::placeholder { color: #a1afc0; }
+/* Remove the up/down spinner arrows on number inputs */
+.form-control[type=number]::-webkit-inner-spin-button,
+.form-control[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.form-control[type=number] { -moz-appearance: textfield; appearance: textfield; }
 textarea.form-control { resize: vertical; min-height: 64px; }
 .form-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
 .calc-display { display: inline-flex; align-items: center; padding: 9px 12px; background: var(--gray-light); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--primary); min-width: 140px; }

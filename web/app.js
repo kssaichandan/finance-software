@@ -791,9 +791,6 @@ async function showDetail(borrowerId) {
         <div class="summary-row"><span class="summary-key">Total Payable</span><span class="summary-val">${money(s.total_payable)}</span></div>
         <div class="summary-row"><span class="summary-key">Paid So Far</span><span class="summary-val primary">${money(s.total_paid)}</span></div>
         <div class="summary-row"><span class="summary-key">Remaining</span><span class="summary-val">${money(s.remaining)}</span></div>
-        ${s.total_penalties > 0.01 ? `
-        <div class="summary-row"><span class="summary-key">+ Penalties (O/D)</span><span class="summary-val danger">${money(s.total_penalties)}</span></div>
-        <div class="summary-row total-owed-row"><span class="summary-key">Total Owed</span><span class="summary-val danger">${money(s.remaining + s.total_penalties)}</span></div>` : ''}
         <div class="summary-row"><span class="summary-key">Progress</span><span class="summary-val">${progressBar(s.total_paid, s.total_payable)}</span></div>
         <div class="summary-row"><span class="summary-key">Expected by Today</span><span class="summary-val">${money(s.expected_paid_by_today)}</span></div>
         <div class="summary-row">
