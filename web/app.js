@@ -68,9 +68,18 @@ function toast(msg, type = 'info') {
 
 async function api(method, ...args) {
   try {
-    return await window.pywebview.api[method](...args);
+    const res = await fetch('/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err);
+    }
+    return await res.json();
   } catch (e) {
-    toast(`API error: ${e}`, 'error');
+    toast(`API error: ${e.message || e}`, 'error');
     throw e;
   }
 }
@@ -1137,4 +1146,4 @@ async function showPaymentSchedule(borrowerId) {
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────
-window.addEventListener('pywebviewready', () => navigate('dashboard'));
+window.addEventListener('DOMContentLoaded', () => navigate('dashboard'));

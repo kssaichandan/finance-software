@@ -1,1 +1,2 @@
-PySide6>=6.6.0
+# No external dependencies — uses only Python's standard library.
+# Standalone .exe is built with PyInstaller.

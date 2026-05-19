@@ -1,6 +1,8 @@
-"""Python API exposed to the JavaScript frontend via pywebview."""
+"""Python API exposed to the JavaScript frontend over local HTTP."""
 import csv
+import os
 from datetime import date
+from pathlib import Path
 
 import db
 import models
@@ -43,7 +45,7 @@ def _summary(s: models.LoanSummary) -> dict:
 
 class API:
     def __init__(self):
-        self._window = None  # set after webview.create_window
+        pass
 
     # ---- Dashboard -------------------------------------------------------
 
@@ -256,16 +258,10 @@ class API:
     # ---- CSV Export ------------------------------------------------------
 
     def export_csv(self) -> dict:
-        import webview
         today = date.today().strftime("%Y%m%d")
-        result = self._window.create_file_dialog(
-            webview.SAVE_DIALOG,
-            save_filename=f"overdue_{today}.csv",
-            file_types=("CSV files (*.csv)",),
-        )
-        if not result:
-            return {"success": False, "cancelled": True}
-        path = result[0] if isinstance(result, (list, tuple)) else result
+        downloads = Path(os.path.expanduser("~")) / "Downloads"
+        downloads.mkdir(parents=True, exist_ok=True)
+        path = str(downloads / f"overdue_{today}.csv")
         try:
             summaries = models.all_summaries()
             overdue = [s for s in summaries if s.is_overdue]
