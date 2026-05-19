@@ -1350,14 +1350,22 @@ async function showPaymentSchedule(borrowerId) {
 window.addEventListener('DOMContentLoaded', () => navigate('dashboard'));
 
 // Prevent mouse-wheel from silently changing a focused number input.
-// Without this, scrolling over an active loan amount / period / rate field
-// would change the value by accident. Blurring the field on wheel lets the
-// page scroll normally and keeps the typed number intact.
 document.addEventListener('wheel', e => {
   if (e.target && e.target.type === 'number' && document.activeElement === e.target) {
     e.target.blur();
   }
 }, { passive: true });
+
+// Block keyboard up/down/PgUp/PgDn on number inputs — only manual typing
+// should change the value. Tab, Enter, Backspace, Delete, ←/→ still work.
+document.addEventListener('keydown', e => {
+  if (e.target && e.target.type === 'number') {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+        e.key === 'PageUp' || e.key === 'PageDown') {
+      e.preventDefault();
+    }
+  }
+});
 
 // Heartbeat: tells the local server "the window is still open".
 // If these stop arriving for ~20s, the server shuts itself down,
