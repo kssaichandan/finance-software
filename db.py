@@ -21,8 +21,10 @@ CREATE TABLE IF NOT EXISTS borrowers (
     father_name         TEXT,
     address             TEXT,
     phone               TEXT,
+    phone2              TEXT    DEFAULT '',
     guarantor_name      TEXT,
     guarantor_phone     TEXT,
+    guarantor_phone2    TEXT    DEFAULT '',
     guarantor_address   TEXT,
     vehicle_type        TEXT,
     vehicle_no          TEXT,
@@ -78,10 +80,14 @@ def connect() -> sqlite3.Connection:
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
-        # Migration: add book_ref to existing databases that predate this column
         cols = [r[1] for r in conn.execute("PRAGMA table_info(borrowers)").fetchall()]
+        # Backfill columns that may be missing on databases created by older versions.
         if "book_ref" not in cols:
             conn.execute("ALTER TABLE borrowers ADD COLUMN book_ref TEXT DEFAULT ''")
+        if "phone2" not in cols:
+            conn.execute("ALTER TABLE borrowers ADD COLUMN phone2 TEXT DEFAULT ''")
+        if "guarantor_phone2" not in cols:
+            conn.execute("ALTER TABLE borrowers ADD COLUMN guarantor_phone2 TEXT DEFAULT ''")
 
 
 def add_borrower(data: dict) -> int:

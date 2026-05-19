@@ -50,6 +50,14 @@ function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Convert "YYYY-MM-DD" → "DD-MM-YY" for display. Leaves anything else untouched.
+function fmtDate(s) {
+  if (!s) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s));
+  if (!m) return String(s);
+  return `${m[3]}-${m[2]}-${m[1].slice(2)}`;
+}
+
 function loading(show) {
   document.getElementById('loader').classList.toggle('hidden', !show);
 }
@@ -368,7 +376,7 @@ function filterBorrowers(q) {
       <td><strong>${esc(s.name)}</strong></td>
       <td>${esc(s.phone) || '—'}</td>
       <td><code style="font-size:12px">${esc(s.vehicle_no) || '—'}</code></td>
-      <td>${esc(s.loan_date)}</td>
+      <td>${fmtDate(s.loan_date)}</td>
       <td>${money(s.loan_amount)}</td>
       <td>${progressBar(s.total_paid, s.total_payable)}</td>
       <td>${overdueTd}</td>
@@ -450,6 +458,10 @@ function renderAddBorrower(borrower = null) {
             <label>Phone</label>
             <input class="form-control" name="phone" type="tel" maxlength="10" value="${esc(b.phone)}" placeholder="10-digit mobile" />
           </div>
+          <div class="form-group">
+            <label>Alternate Phone</label>
+            <input class="form-control" name="phone2" type="tel" maxlength="10" value="${esc(b.phone2)}" placeholder="Optional 2nd number" />
+          </div>
         </div>
       </div>
 
@@ -464,6 +476,10 @@ function renderAddBorrower(borrower = null) {
           <div class="form-group">
             <label>Guarantor Phone</label>
             <input class="form-control" name="guarantor_phone" type="tel" maxlength="10" value="${esc(b.guarantor_phone)}" placeholder="10-digit mobile" />
+          </div>
+          <div class="form-group">
+            <label>Guarantor Alt Phone</label>
+            <input class="form-control" name="guarantor_phone2" type="tel" maxlength="10" value="${esc(b.guarantor_phone2)}" placeholder="Optional 2nd number" />
           </div>
           <div class="form-group form-full">
             <label>Guarantor Address</label>
@@ -641,7 +657,7 @@ async function showDetail(borrowerId) {
   const payRows = payments.length > 0
     ? payments.map(p => `
         <tr>
-          <td>${esc(p.payment_date)}</td>
+          <td>${fmtDate(p.payment_date)}</td>
           <td>${esc(p.receipt_no) || '—'}</td>
           <td>${esc(p.installment_label) || '—'}</td>
           <td><strong>${money(p.amount)}</strong></td>
@@ -656,7 +672,7 @@ async function showDetail(borrowerId) {
   const penRows = penalties.length > 0
     ? penalties.map(p => `
         <tr>
-          <td>${esc(p.charge_date)}</td>
+          <td>${fmtDate(p.charge_date)}</td>
           <td>${esc(p.receipt_no) || '—'}</td>
           <td><strong>${money(p.amount)}</strong></td>
           <td>${esc(p.notes) || '—'}</td>
@@ -678,7 +694,7 @@ async function showDetail(borrowerId) {
         <div class="detail-meta">
           ${b.book_ref ? `<span class="book-ref-tag" style="font-size:13px">📒 ${esc(b.book_ref)}</span>` : ''}
           ${b.vehicle_no ? `<span>🏍 ${esc(b.vehicle_no)}</span>` : ''}
-          ${b.phone ? `<span>📞 ${esc(b.phone)}</span>` : ''}
+          ${b.phone ? `<span>📞 ${esc(b.phone)}${b.phone2 ? `, ${esc(b.phone2)}` : ''}</span>` : ''}
           ${b.serial_no ? `<span>S.No: ${esc(b.serial_no)}</span>` : ''}
           <span>${badge(s.status_label)}</span>
         </div>
@@ -692,13 +708,14 @@ async function showDetail(borrowerId) {
         <div class="info-grid">
           ${infoRow('S/o', b.father_name)}
           ${infoRow('Address', b.address)}
-          ${infoRow('Guarantor', b.guarantor_name ? `${b.guarantor_name} — ${b.guarantor_phone || '—'}` : null)}
+          ${infoRow('Alt Phone', b.phone2)}
+          ${infoRow('Guarantor', b.guarantor_name ? `${b.guarantor_name} — ${b.guarantor_phone || '—'}${b.guarantor_phone2 ? `, ${b.guarantor_phone2}` : ''}` : null)}
           ${infoRow('Guar. Address', b.guarantor_address)}
           ${infoRow('Vehicle Type', b.vehicle_type)}
           ${infoRow('Engine / Chassis', [b.engine_no, b.chassis_no].filter(Boolean).join(' / ') || null)}
           ${infoRow('Key No / S.No', [b.key_no, b.serial_no].filter(Boolean).join(' / ') || null)}
           ${infoRow('Show Room', b.showroom)}
-          ${infoRow('Loan Date', b.loan_date)}
+          ${infoRow('Loan Date', fmtDate(b.loan_date))}
           ${infoRow('Principal', money(b.loan_amount))}
           ${infoRow('Interest', `${b.interest_rate}% flat`)}
           ${infoRow('Period', `${b.period_months} months`)}
@@ -726,7 +743,7 @@ async function showDetail(borrowerId) {
         </div>
         <div class="summary-row"><span class="summary-key">Months Elapsed</span><span class="summary-val">${s.months_elapsed} / ${s.period_months}</span></div>
         <div class="summary-row"><span class="summary-key">Penalties Paid</span><span class="summary-val">${money(s.total_penalties)}</span></div>
-        <div class="summary-row"><span class="summary-key">Last Payment</span><span class="summary-val">${s.last_payment_date || '—'}</span></div>
+        <div class="summary-row"><span class="summary-key">Last Payment</span><span class="summary-val">${fmtDate(s.last_payment_date) || '—'}</span></div>
       </div>
     </div>
 
@@ -1145,7 +1162,7 @@ async function showPaymentSchedule(borrowerId) {
   const rows = schedule.map(inst => `
     <tr class="${rowCls[inst.status]}">
       <td style="font-weight:600;color:var(--text-muted)">${inst.no}</td>
-      <td>${inst.due_date}</td>
+      <td>${fmtDate(inst.due_date)}</td>
       <td>${money(inst.amount)}</td>
       <td style="font-size:12px;color:var(--text-muted)">${money(inst.expected_cumulative)}</td>
       <td>${statusIcon[inst.status]} <span style="font-size:12px">${statusLabel[inst.status]}</span></td>

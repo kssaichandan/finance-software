@@ -286,20 +286,23 @@ class API:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
                 w.writerow([
-                    "Name", "Phone", "Vehicle No", "Loan Date",
+                    "Name", "Phone", "Alt Phone", "Vehicle No", "Loan Date",
                     "Days Overdue", "Overdue Amount (Rs)",
                     "Remaining (Rs)", "Last Payment",
-                    "Address", "Guarantor", "Guarantor Phone",
+                    "Address", "Guarantor", "Guarantor Phone", "Guarantor Alt Phone",
                 ])
                 for s in overdue:
                     b = db.get_borrower(s.borrower_id)
                     w.writerow([
-                        s.name, s.phone, s.vehicle_no,
-                        s.loan_date.strftime("%Y-%m-%d"),
+                        s.name, s.phone, (b["phone2"] or "") if "phone2" in b.keys() else "",
+                        s.vehicle_no,
+                        s.loan_date.strftime("%d-%m-%y"),
                         s.days_overdue, int(round(s.overdue_amount)),
-                        int(round(s.remaining)), s.last_payment_date or "",
+                        int(round(s.remaining)),
+                        s.last_payment_date or "",
                         b["address"] or "", b["guarantor_name"] or "",
                         b["guarantor_phone"] or "",
+                        (b["guarantor_phone2"] or "") if "guarantor_phone2" in b.keys() else "",
                     ])
             return {"success": True, "path": path, "count": len(overdue)}
         except OSError as e:
