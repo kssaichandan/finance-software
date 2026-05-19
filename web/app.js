@@ -154,6 +154,46 @@ async function navigate(view) {
   else if (view === 'borrowers') await renderBorrowers();
   else if (view === 'add') renderAddBorrower();
   else if (view === 'portfolio') await renderPortfolio();
+  else if (view === 'help') renderHelp();
+}
+
+function renderHelp() {
+  const langs = window.HELP_LANGS || { en: 'English' };
+  const allContent = window.HELP_CONTENT || {};
+  let lang = '';
+  try { lang = localStorage.getItem('helpLang') || ''; } catch (e) {}
+  if (!langs[lang] || !allContent[lang]) lang = 'en';
+  const content = allContent[lang] || allContent.en || { title: 'Help', sections: [] };
+
+  const langOptions = Object.keys(langs).map(code =>
+    `<option value="${code}" ${code === lang ? 'selected' : ''}>${esc(langs[code])}</option>`
+  ).join('');
+
+  const sectionsHTML = (content.sections || []).map(s => `
+    <div class="help-section">
+      <h3 class="help-section-title">${esc(s.h)}</h3>
+      <div class="help-section-body">${s.body}</div>
+    </div>
+  `).join('');
+
+  document.getElementById('view').innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-title">${esc(content.title || 'Help')}</div>
+        <div class="page-subtitle">${esc(content.subtitle || '')}</div>
+      </div>
+      <div class="header-actions">
+        <label style="font-size:13px;color:var(--text-muted);margin-right:8px">Language:</label>
+        <select class="filter-select" onchange="setHelpLang(this.value)">${langOptions}</select>
+      </div>
+    </div>
+    <div class="help-page">${sectionsHTML}</div>
+  `;
+}
+
+function setHelpLang(code) {
+  try { localStorage.setItem('helpLang', code); } catch (e) {}
+  renderHelp();
 }
 
 async function refreshCurrentView() {

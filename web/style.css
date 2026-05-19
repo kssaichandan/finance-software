@@ -157,6 +157,17 @@ table.data-table { width: 100%; border-collapse: collapse; }
   margin: 0;
 }
 .form-control[type=number] { -moz-appearance: textfield; appearance: textfield; }
+
+/* Help page */
+.help-page { display: flex; flex-direction: column; gap: 14px; }
+.help-section { background: white; border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; }
+.help-section-title { margin: 0 0 10px 0; font-size: 16px; font-weight: 700; color: var(--text); }
+.help-section-body { font-size: 14px; color: var(--text); line-height: 1.6; }
+.help-section-body p { margin: 0 0 10px 0; }
+.help-section-body p:last-child { margin-bottom: 0; }
+.help-section-body ul { margin: 0; padding-left: 22px; }
+.help-section-body li { margin-bottom: 6px; }
+.help-section-body code { background: var(--gray-light); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 textarea.form-control { resize: vertical; min-height: 64px; }
 .form-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
 .calc-display { display: inline-flex; align-items: center; padding: 9px 12px; background: var(--gray-light); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--primary); min-width: 140px; }
