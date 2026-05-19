@@ -6,6 +6,8 @@ let searchQuery = '';
 let showClosed = false;
 let statusFilter = 'all';
 let pickDate = '';
+let customMinDays = 0;     // threshold for the "Custom overdue" filter
+let customMinAmount = 0;
 let _viewDirty = false;   // set by mutating ops; closeModal refreshes only if true
 let _formDirty = false;   // set by typing in a form; Cancel warns only if true
 
@@ -305,7 +307,13 @@ async function renderBorrowers() {
       <select class="filter-select" id="status-filter-select"
         onchange="setStatusFilter(this.value)">
         <option value="all"         ${statusFilter==='all'         ?'selected':''}>All Active</option>
-        <option value="overdue"     ${statusFilter==='overdue'     ?'selected':''}>Overdue</option>
+        <option value="overdue"     ${statusFilter==='overdue'     ?'selected':''}>Overdue (any)</option>
+        <option value="od_1m"       ${statusFilter==='od_1m'       ?'selected':''}>Overdue > 1 month (30+ days)</option>
+        <option value="od_2m"       ${statusFilter==='od_2m'       ?'selected':''}>Overdue > 2 months (60+ days)</option>
+        <option value="od_3m"       ${statusFilter==='od_3m'       ?'selected':''}>Overdue > 3 months (90+ days)</option>
+        <option value="od_1k"       ${statusFilter==='od_1k'       ?'selected':''}>Overdue > ₹1,000</option>
+        <option value="od_5k"       ${statusFilter==='od_5k'       ?'selected':''}>Overdue > ₹5,000</option>
+        <option value="od_custom"   ${statusFilter==='od_custom'   ?'selected':''}>Custom overdue filter…</option>
         <option value="ontime"      ${statusFilter==='ontime'      ?'selected':''}>On Time</option>
         <option value="advance"     ${statusFilter==='advance'     ?'selected':''}>Advance</option>
         <option value="closed"      ${statusFilter==='closed'      ?'selected':''}>Closed</option>
@@ -320,6 +328,16 @@ async function renderBorrowers() {
         value="${esc(fmtDate(pickDate))}"
         style="${statusFilter !== 'pick_date' ? 'display:none' : ''}"
         onchange="setPickDate(this.value)" />
+      <input type="number" id="custom-min-days" class="form-control pick-date-input"
+        placeholder="Min days overdue" min="0"
+        value="${customMinDays || ''}"
+        style="${statusFilter !== 'od_custom' ? 'display:none' : ''}"
+        oninput="setCustomMinDays(this.value)" />
+      <input type="number" id="custom-min-amount" class="form-control pick-date-input"
+        placeholder="Min ₹ overdue" min="0"
+        value="${customMinAmount || ''}"
+        style="${statusFilter !== 'od_custom' ? 'display:none' : ''}"
+        oninput="setCustomMinAmount(this.value)" />
       <label class="filter-label" id="closed-toggle"
         style="${statusFilter !== 'all' ? 'display:none' : ''}">
         <input type="checkbox" id="closed-check" ${showClosed ? 'checked' : ''}
@@ -359,6 +377,24 @@ function filterBorrowers(q) {
       if (!showClosed && s.closed) return false;
     } else if (statusFilter === 'overdue') {
       if (!s.is_overdue) return false;
+    } else if (statusFilter === 'od_1m') {
+      if (!s.is_overdue || s.days_overdue < 30) return false;
+    } else if (statusFilter === 'od_2m') {
+      if (!s.is_overdue || s.days_overdue < 60) return false;
+    } else if (statusFilter === 'od_3m') {
+      if (!s.is_overdue || s.days_overdue < 90) return false;
+    } else if (statusFilter === 'od_1k') {
+      if (!s.is_overdue || s.overdue_amount < 1000) return false;
+    } else if (statusFilter === 'od_5k') {
+      if (!s.is_overdue || s.overdue_amount < 5000) return false;
+    } else if (statusFilter === 'od_custom') {
+      if (!s.is_overdue) return false;
+      // OR logic: must meet EITHER threshold (when set). If both are 0, show all overdue.
+      if (customMinDays > 0 || customMinAmount > 0) {
+        const okDays = customMinDays > 0 && s.days_overdue >= customMinDays;
+        const okAmt = customMinAmount > 0 && s.overdue_amount >= customMinAmount;
+        if (!okDays && !okAmt) return false;
+      }
     } else if (statusFilter === 'ontime') {
       if (s.closed || s.is_overdue || s.is_advance) return false;
     } else if (statusFilter === 'advance') {
@@ -431,8 +467,12 @@ function setStatusFilter(val) {
   statusFilter = val;
   const pickInput = document.getElementById('pick-date-input');
   const closedLabel = document.getElementById('closed-toggle');
+  const minDays = document.getElementById('custom-min-days');
+  const minAmt = document.getElementById('custom-min-amount');
   if (pickInput) pickInput.style.display = val === 'pick_date' ? '' : 'none';
   if (closedLabel) closedLabel.style.display = val === 'all' ? '' : 'none';
+  if (minDays) minDays.style.display = val === 'od_custom' ? '' : 'none';
+  if (minAmt) minAmt.style.display = val === 'od_custom' ? '' : 'none';
   filterBorrowers(searchQuery);
 }
 
@@ -441,6 +481,16 @@ function setPickDate(val) {
   const iso = parseUserDate(val);
   pickDate = iso || '';
   if (val && !iso) toast('Invalid date. Use dd-mm-yy.', 'error');
+  filterBorrowers(searchQuery);
+}
+
+function setCustomMinDays(val) {
+  customMinDays = Math.max(0, parseInt(val, 10) || 0);
+  filterBorrowers(searchQuery);
+}
+
+function setCustomMinAmount(val) {
+  customMinAmount = Math.max(0, parseFloat(val) || 0);
   filterBorrowers(searchQuery);
 }
 
@@ -1298,6 +1348,16 @@ async function showPaymentSchedule(borrowerId) {
 
 // ── Bootstrap ────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => navigate('dashboard'));
+
+// Prevent mouse-wheel from silently changing a focused number input.
+// Without this, scrolling over an active loan amount / period / rate field
+// would change the value by accident. Blurring the field on wheel lets the
+// page scroll normally and keeps the typed number intact.
+document.addEventListener('wheel', e => {
+  if (e.target && e.target.type === 'number' && document.activeElement === e.target) {
+    e.target.blur();
+  }
+}, { passive: true });
 
 // Heartbeat: tells the local server "the window is still open".
 // If these stop arriving for ~20s, the server shuts itself down,
