@@ -4,7 +4,7 @@
 let currentView = 'dashboard';
 let searchQuery = '';
 let showClosed = false;
-let statusFilter = 'overdue';
+let statusFilter = 'all';
 let pickDate = '';
 
 // ── Utilities ────────────────────────────────────────────────────
