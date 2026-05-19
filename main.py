@@ -3,6 +3,10 @@ import os
 import sys
 import traceback
 
+# Must be set before webview is imported — prevents pywebview from
+# trying the winforms backend (which needs .NET/pythonnet) at all.
+os.environ['PYWEBVIEW_GUI'] = 'edgechromium'
+
 
 def _base_dir() -> str:
     if getattr(sys, "frozen", False):
