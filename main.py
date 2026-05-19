@@ -35,7 +35,7 @@ def main():
         min_size=(960, 640),
     )
     api._window = window
-    webview.start(debug=False)
+    webview.start(debug=False, gui='edgechromium')
 
 
 if __name__ == "__main__":
