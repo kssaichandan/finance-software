@@ -150,8 +150,9 @@ async function refreshCurrentView() {
 // ── Dashboard view ───────────────────────────────────────────────
 async function renderDashboard() {
   loading(true);
-  const summaries = await api('get_all_borrowers');
-  loading(false);
+  let summaries;
+  try { summaries = await api('get_all_borrowers'); }
+  finally { loading(false); }
 
   const today = new Date().toISOString().split('T')[0];
   const todayFmt = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
@@ -254,8 +255,9 @@ async function renderDashboard() {
 // ── All Borrowers view ───────────────────────────────────────────
 async function renderBorrowers() {
   loading(true);
-  const summaries = await api('get_all_borrowers');
-  loading(false);
+  let summaries;
+  try { summaries = await api('get_all_borrowers'); }
+  finally { loading(false); }
 
   const today = new Date().toISOString().split('T')[0];
   const overdueSummaries = summaries.filter(s => s.is_overdue);
@@ -682,8 +684,9 @@ async function submitBorrower(e, existingId) {
 // ── Borrower Detail modal ────────────────────────────────────────
 async function showDetail(borrowerId) {
   loading(true);
-  const data = await api('get_borrower_detail', borrowerId);
-  loading(false);
+  let data;
+  try { data = await api('get_borrower_detail', borrowerId); }
+  finally { loading(false); }
   if (!data) { toast('Borrower not found.', 'error'); return; }
 
   const { borrower: b, summary: s, payments, penalties } = data;
@@ -722,7 +725,7 @@ async function showDetail(borrowerId) {
 
   const closedBtn = s.closed
     ? `<button class="btn btn-sm btn-outline" onclick="reopenLoan(${b.id})">🔓 Re-open Loan</button>`
-    : `<button class="btn btn-sm btn-danger" onclick="confirmCloseLoan(${b.id})">✔ Mark Closed</button>`;
+    : `<button class="btn btn-sm btn-success" onclick="confirmCloseLoan(${b.id})">✔ Mark Closed</button>`;
 
   document.getElementById('modal-inner').innerHTML = `
     <div class="detail-header">
@@ -754,7 +757,7 @@ async function showDetail(borrowerId) {
           ${infoRow('Show Room', b.showroom)}
           ${infoRow('Loan Date', fmtDate(b.loan_date))}
           ${infoRow('Principal', money(b.loan_amount))}
-          ${infoRow('Interest', `${b.interest_rate}% flat`)}
+          ${infoRow('Interest', `${b.interest_rate}% per year`)}
           ${infoRow('Period', `${b.period_months} months`)}
           ${infoRow('Installment', money(b.installment_amount))}
         </div>
@@ -1083,8 +1086,9 @@ async function confirmDeleteBorrower(btn) {
 // ── Edit borrower (from detail modal) ───────────────────────────
 async function loadEditForm(borrowerId) {
   loading(true);
-  const data = await api('get_borrower_detail', borrowerId);
-  loading(false);
+  let data;
+  try { data = await api('get_borrower_detail', borrowerId); }
+  finally { loading(false); }
   if (!data) return;
   renderAddBorrower(data.borrower);
 }
@@ -1092,11 +1096,11 @@ async function loadEditForm(borrowerId) {
 // ── CSV Export ───────────────────────────────────────────────────
 async function exportCSV() {
   loading(true);
-  const r = await api('export_csv');
-  loading(false);
-  if (r.cancelled) return;
-  if (r.success) toast(`Exported ${r.count} row(s) to CSV.`, 'success');
-  else toast('Export failed: ' + r.error, 'error');
+  let r;
+  try { r = await api('export_csv'); }
+  finally { loading(false); }
+  if (r.success) toast(`Exported ${r.count} row(s) → ${r.path}`, 'success');
+  else toast('Export failed: ' + (r.error || 'unknown'), 'error');
 }
 
 // ── Modal helpers ────────────────────────────────────────────────
@@ -1123,8 +1127,9 @@ document.addEventListener('keydown', e => {
 // ── Portfolio view ───────────────────────────────────────────────
 async function renderPortfolio() {
   loading(true);
-  const p = await api('get_portfolio_summary');
-  loading(false);
+  let p;
+  try { p = await api('get_portfolio_summary'); }
+  finally { loading(false); }
 
   const collectedPct = p.total_payable > 0
     ? Math.min(100, Math.round((p.total_collected / p.total_payable) * 100))
@@ -1203,11 +1208,13 @@ async function renderPortfolio() {
 // ── Payment Schedule modal ───────────────────────────────────────
 async function showPaymentSchedule(borrowerId) {
   loading(true);
-  const [detail, schedule] = await Promise.all([
-    api('get_borrower_detail', borrowerId),
-    api('get_payment_schedule', borrowerId),
-  ]);
-  loading(false);
+  let detail, schedule;
+  try {
+    [detail, schedule] = await Promise.all([
+      api('get_borrower_detail', borrowerId),
+      api('get_payment_schedule', borrowerId),
+    ]);
+  } finally { loading(false); }
   if (!detail) return;
 
   const { borrower: b, summary: s } = detail;
@@ -1267,3 +1274,12 @@ async function showPaymentSchedule(borrowerId) {
 
 // ── Bootstrap ────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => navigate('dashboard'));
+
+// Heartbeat: tells the local server "the window is still open".
+// If these stop arriving for ~20s, the server shuts itself down,
+// so closing the window actually closes the app (no ghost processes).
+function _heartbeat() {
+  fetch('/heartbeat', { method: 'POST', keepalive: true }).catch(() => {});
+}
+_heartbeat();
+setInterval(_heartbeat, 5000);

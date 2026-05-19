@@ -7,6 +7,7 @@ dependencies.
 """
 import os
 import sys
+import time
 import json
 import socket
 import threading
@@ -15,7 +16,18 @@ import webbrowser
 import subprocess
 import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse
+
+
+# Updated by every request and every heartbeat. If no activity for
+# IDLE_TIMEOUT seconds (browser window closed), the process exits.
+LAST_ACTIVITY = time.time()
+IDLE_TIMEOUT = 20.0  # seconds
+
+
+def _touch() -> None:
+    global LAST_ACTIVITY
+    LAST_ACTIVITY = time.time()
 
 
 def _base_dir() -> str:
@@ -66,6 +78,7 @@ def build_handler(api):
             self.wfile.write(body)
 
         def do_GET(self):
+            _touch()
             path = urlparse(self.path).path
             if path == "/" or path == "":
                 path = "/index.html"
@@ -81,7 +94,12 @@ def build_handler(api):
                 self._send(404, f"Not found: {path}")
 
         def do_POST(self):
+            _touch()
             path = urlparse(self.path).path
+            # Heartbeat: page is still open, keep server alive
+            if path == "/heartbeat":
+                self._send(200, b"ok", "text/plain")
+                return
             if not path.startswith("/api/"):
                 self._send(404, "Not found")
                 return
@@ -138,14 +156,23 @@ def main():
     url = f"http://127.0.0.1:{port}/"
     _launch_browser(url)
 
-    # Keep the process alive while the app window is open. We can't easily
-    # detect when the browser window closes, so we just wait forever; the user
-    # closes the app by closing the browser window AND ending the process from
-    # the system tray / task manager. For simplicity we just block.
+    # Watchdog: exit when the browser window stops sending heartbeats.
+    # Frontend pings /heartbeat every 5s; if we see no activity for IDLE_TIMEOUT
+    # seconds, assume the window was closed and shut the process down.
+    # Grace period at startup so the page has time to load and start pinging.
+    _touch()  # reset clock at startup
+    grace_until = time.time() + 15.0
     try:
-        threading.Event().wait()
+        while True:
+            time.sleep(3)
+            now = time.time()
+            if now < grace_until:
+                continue
+            if now - LAST_ACTIVITY > IDLE_TIMEOUT:
+                # Browser closed (or never opened) — exit cleanly.
+                return
     except KeyboardInterrupt:
-        pass
+        return
 
 
 if __name__ == "__main__":
