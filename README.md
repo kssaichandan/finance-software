@@ -16,26 +16,31 @@ Or on GitHub, look for the **"Releases"** section on the right side of the page 
 
 ### Step 2 — Download the zip file
 
-On the Releases page, under **"Assets"**, click **`FinanceTracker-v1.0.zip`** to download it.
+On the Releases page, under **"Assets"**, click **`FinanceTracker-v1.1.zip`** to download it.
 
 > Do NOT click "Source code (zip)" — that is the raw code, not the app.
 
 ---
 
-### Step 3 — Extract the zip
+### Step 3 — Extract the zip BEFORE running
+
+> ⚠️ **Important:** Do NOT double-click the `.exe` from inside the zip. You must extract first or it will fail with a DLL error.
 
 1. Find the downloaded zip in your **Downloads** folder
 2. Right-click it → **"Extract All..."**
 3. Choose a permanent location, for example: `C:\FinanceTracker\`
 4. Click **Extract**
+5. Windows will open the extracted folder automatically
 
-> Keep the entire extracted folder together — do not move just the `.exe` out of the folder, it needs all the files next to it.
+> Keep the entire extracted folder together — do not move just the `.exe` out, it needs the `_internal` folder next to it.
 
 ---
 
 ### Step 4 — Run the app
 
-Open the extracted folder and double-click **`FinanceTracker.exe`**.
+Inside the extracted folder, double-click **`FinanceTracker.exe`**.
+
+> If the folder shows "Extract all" at the top of the window, you are still inside the zip — go back and do Step 3 first.
 
 The first time Windows may show a blue warning:
 > *"Windows protected your PC"*
