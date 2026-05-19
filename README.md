@@ -1,72 +1,100 @@
 # Finance Tracker
 
-A simple Windows desktop app for tracking vehicle finance loans, installment payments, and overdue borrowers. Built with Python + PySide6, SQLite storage.
+A Windows desktop app for tracking vehicle finance loans — installment payments, overdue amounts, and penalties. No internet required. All data stays on your computer.
+
+---
+
+## Download & Install (no Python needed)
+
+> **One-click install for Windows**
+
+1. Go to the [**Releases**](../../releases/latest) page of this repository.
+2. Download **`FinanceTracker.zip`** from the latest release.
+3. Extract the zip anywhere (e.g. `C:\FinanceTracker\`).
+4. Double-click **`FinanceTracker.exe`** to launch.
+
+Your data is saved in `finance.db` in the same folder as the `.exe`. Back this file up regularly (copy to a USB drive or cloud folder).
+
+---
 
 ## Features
-- Add borrowers with full loan/vehicle/guarantor details
-- Record installment payments and O/D penalty charges
-- Automatic flat-interest calculation (Total = Principal + Principal × Rate%)
-- **Dashboard** that shows overdue borrowers, sorted by amount overdue
-- Search across borrowers by name, phone, or vehicle number
-- Export overdue list to CSV (open in Excel / WhatsApp share)
-- Borrower detail view with payment history and live summary
 
-## How overdue is calculated
-For each active loan, on every refresh:
-1. Count whole months elapsed from loan date (same day-of-month rule).
-2. Cap to the loan's period (e.g. 12 months).
-3. Expected paid by today = `installments_due × monthly_installment`.
-4. Actually paid = sum of all payments recorded (penalties tracked separately).
-5. **Overdue amount = Expected − Actual**. If > 0, borrower is flagged on the dashboard.
+- Add borrowers with full loan, vehicle, and guarantor details
+- Record installment payments and overdue (O/D) penalty charges
+- Flat-interest calculation: Total = Principal × 1.24, EMI = Total ÷ Period
+- Dashboard showing borrowers due today/tomorrow and recently missed payments
+- Filter borrowers by status: Overdue, On Time, Advance, Due in N days, pick a date
+- Edit or delete individual payment and penalty entries
+- Export borrower list to CSV (open in Excel)
+- Portable — copy the entire folder to any Windows PC and it works
 
-## Running
+---
+
+## Interest Calculation
+
+| Field | Formula |
+|---|---|
+| Total payable | Principal × 1.24 |
+| Monthly EMI | Round(Total ÷ Period) |
+| Overdue amount | (EMIs due so far × EMI) − Total paid |
+| Days overdue | Days since the first unpaid EMI was due |
+
+Penalties are tracked separately and do not affect the overdue calculation.
+
+---
+
+## For Developers — Running from Source
+
+**Requirements:** Python 3.10+, Windows
 
 ```powershell
-# First-time setup
+# Install dependencies
 py -m pip install -r requirements.txt
 
-# Optional: seed the demo borrower (Paramesha from the book photo)
-py seed_sample.py
-
-# Launch the app
+# Run the app
 py main.py
+
+# Optional: seed demo data
+py seed_sample.py
 ```
 
-Data is stored in `finance.db` next to `main.py`. Back this file up to OneDrive / a USB stick to keep your records safe.
-
-## Building a standalone .exe (no Python required to run)
+**Build a standalone .exe:**
 
 ```powershell
-py -m pip install pyinstaller
-py -m PyInstaller --noconfirm --windowed --onefile --name "FinanceTracker" main.py
+build.bat
 ```
 
-The `.exe` will be in `dist\FinanceTracker.exe`. Double-click to launch.
+The built app will be in `dist\FinanceTracker\`. Copy that entire folder anywhere and run `FinanceTracker.exe`.
 
-> ⚠️ When you move the `.exe` to a different folder/computer, the `finance.db` file will be created **next to the .exe** the first time you run it. Move your existing `finance.db` alongside the `.exe` to keep your data.
+---
 
-## File layout
+## File Layout
+
 ```
 finance software/
-├── main.py                 # Entry point
-├── db.py                   # SQLite schema + helpers
-├── models.py               # Overdue/summary calculation logic
-├── seed_sample.py          # One-time demo seed
+├── main.py          # Entry point
+├── db.py            # SQLite schema and helpers
+├── models.py        # Loan/overdue calculation logic
+├── api.py           # JS-to-Python bridge (pywebview)
+├── build.bat        # One-click build script
 ├── requirements.txt
-├── finance.db              # Created at first run (your data lives here)
-└── ui/
-    ├── main_window.py      # Tabbed shell
-    ├── dashboard.py        # Overdue list + CSV export
-    ├── all_borrowers.py    # Searchable list of every loan
-    ├── borrower_form.py    # Add/edit borrower dialog
-    ├── borrower_detail.py  # Full borrower view + payment history
-    ├── payment_form.py     # Add payment / penalty dialogs
-    └── common.py           # Money formatting + row colors
+├── seed_sample.py   # Loads one demo borrower
+├── seed_edge.py     # Loads edge-case demo data for testing
+├── seed_fake.py     # Loads 50 fake borrowers for testing
+└── web/
+    ├── index.html   # App shell
+    ├── style.css    # Styles
+    └── app.js       # All UI logic
 ```
 
-## Future ideas (not in v1)
-- Edit/delete individual payments
-- Multiple loans per same person
-- Auto-backup of `finance.db` to a chosen folder
-- SMS/WhatsApp reminders to borrowers
-- Print-friendly receipt generation
+> `finance.db` is created on first run and is excluded from git — it contains real borrower data.
+
+---
+
+## Backup
+
+Your data lives entirely in `finance.db`. To back it up:
+- Copy it to a USB drive, or
+- Copy it to OneDrive / Google Drive
+
+To restore, place the `.db` file back in the same folder as `FinanceTracker.exe`.
