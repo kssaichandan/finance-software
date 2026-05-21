@@ -4,7 +4,7 @@
 let currentView = 'dashboard';
 let searchQuery = '';
 let showClosed = false;
-let statusFilter = 'all';
+let statusFilter = 'everything';
 let pickDate = '';
 let customMinDays = 0;     // threshold for the "Custom overdue" filter
 let customMinAmount = 0;
@@ -149,6 +149,18 @@ function jsMonthsElapsed(fromStr, toStr) {
   let months = (ty - fy) * 12 + (tm - fm);
   if (td < fd) months -= 1;
   return Math.max(0, months);
+}
+
+// True if a borrower has a penalty situation — either PENALTY DUE (loan still
+// running past its period with money owed) or PAID LATE (cleared after the
+// loan period). Same logic as the badge shown in the borrower detail page.
+function hasPenalty(s) {
+  if (!s.loan_date || !s.period_months) return false;
+  const lastDue = jsAddMonths(s.loan_date, s.period_months);
+  const todayStr = new Date().toISOString().split('T')[0];
+  if (!s.closed && s.remaining > 0.01 && todayStr > lastDue) return true;   // PENALTY DUE
+  if (s.last_payment_date && s.last_payment_date > lastDue) return true;    // PAID LATE
+  return false;
 }
 
 // ── Navigation ───────────────────────────────────────────────────
@@ -355,7 +367,9 @@ async function renderBorrowers() {
         oninput="filterBorrowers(this.value)" />
       <select class="filter-select" id="status-filter-select"
         onchange="setStatusFilter(this.value)">
-        <option value="all"         ${statusFilter==='all'         ?'selected':''}>All Active</option>
+        <option value="everything" ${statusFilter==='everything'  ?'selected':''}>All Borrowers (Active + Closed)</option>
+        <option value="all"         ${statusFilter==='all'         ?'selected':''}>Active Only</option>
+        <option value="penalty"     ${statusFilter==='penalty'     ?'selected':''}>Has Penalty (Due or Paid Late)</option>
         <option value="overdue"     ${statusFilter==='overdue'     ?'selected':''}>Overdue (any)</option>
         <option value="od_1m"       ${statusFilter==='od_1m'       ?'selected':''}>Overdue > 1 month (30+ days)</option>
         <option value="od_2m"       ${statusFilter==='od_2m'       ?'selected':''}>Overdue > 2 months (60+ days)</option>
@@ -422,8 +436,12 @@ function filterBorrowers(q) {
 
   const rows = summaries.filter(s => {
     // Status / date filter
-    if (statusFilter === 'all') {
+    if (statusFilter === 'everything') {
+      // show all borrowers — active and closed, no status filtering
+    } else if (statusFilter === 'all') {
       if (!showClosed && s.closed) return false;
+    } else if (statusFilter === 'penalty') {
+      if (!hasPenalty(s)) return false;
     } else if (statusFilter === 'overdue') {
       if (!s.is_overdue) return false;
     } else if (statusFilter === 'od_1m') {
