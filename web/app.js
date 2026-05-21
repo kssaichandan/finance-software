@@ -869,9 +869,11 @@ async function showDetail(borrowerId) {
           ${infoRow('Key No / S.No', [b.key_no, b.serial_no].filter(Boolean).join(' / ') || null)}
           ${infoRow('Show Room', b.showroom)}
           ${infoRow('Loan Date', fmtDate(b.loan_date))}
+          ${infoRow('Period', `${b.period_months} months`)}
+          ${infoRow('Last Payment Due', b.loan_date && b.period_months
+              ? fmtDate(jsAddMonths(b.loan_date, b.period_months)) : null)}
           ${infoRow('Principal', money(b.loan_amount))}
           ${infoRow('Interest', `${b.interest_rate}% per year`)}
-          ${infoRow('Period', `${b.period_months} months`)}
           ${infoRow('Installment', money(b.installment_amount))}
         </div>
       </div>
