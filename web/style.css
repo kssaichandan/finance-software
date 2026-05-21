@@ -195,6 +195,19 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 .info-val { color: var(--text); font-weight: 500; word-break: break-word; }
 .info-val.val-red { color: var(--danger); font-weight: 700; }
 
+/* Penalty-due alert near borrower name */
+.penalty-alert {
+  display: inline-block;
+  margin: 6px 0 2px;
+  background: var(--danger);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 6px;
+  letter-spacing: 0.2px;
+}
+
 /* Multi-payment Add Payment modal */
 .pay-blocks-wrap { max-height: 46vh; overflow-y: auto; padding-right: 4px; }
 .pay-block { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }

@@ -142,6 +142,15 @@ function nextDueDateFor(s) {
   return jsAddMonths(s.loan_date, next);
 }
 
+// Whole months from one YYYY-MM-DD date to another (same day-of-month rule).
+function jsMonthsElapsed(fromStr, toStr) {
+  const [fy, fm, fd] = fromStr.split('-').map(Number);
+  const [ty, tm, td] = toStr.split('-').map(Number);
+  let months = (ty - fy) * 12 + (tm - fm);
+  if (td < fd) months -= 1;
+  return Math.max(0, months);
+}
+
 // ── Navigation ───────────────────────────────────────────────────
 async function navigate(view) {
   currentView = view;
@@ -840,10 +849,26 @@ async function showDetail(borrowerId) {
     ? `<button class="btn btn-sm btn-outline" onclick="reopenLoan(${b.id})">🔓 Re-open Loan</button>`
     : `<button class="btn btn-sm btn-success" onclick="confirmCloseLoan(${b.id})">✔ Mark Closed</button>`;
 
+  // Penalty alert: loan has run PAST its agreed period and money is still owed.
+  let penaltyAlert = '';
+  if (b.loan_date && b.period_months && !s.closed && s.remaining > 0.01) {
+    const lastDue = jsAddMonths(b.loan_date, b.period_months);
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (todayStr > lastDue) {
+      const monthsOver = jsMonthsElapsed(lastDue, todayStr);
+      const detail = monthsOver >= 1
+        ? `${monthsOver} month${monthsOver > 1 ? 's' : ''} past loan period`
+        : 'past loan period';
+      penaltyAlert = `<div class="penalty-alert">⚠ PENALTY DUE — ${detail}
+        &nbsp;·&nbsp; loan was due ${fmtDate(lastDue)}</div>`;
+    }
+  }
+
   document.getElementById('modal-inner').innerHTML = `
     <div class="detail-header">
       <div>
         <div class="detail-name">${esc(b.name)}</div>
+        ${penaltyAlert}
         <div class="detail-meta">
           ${b.book_ref ? `<span class="book-ref-tag" style="font-size:13px">📒 ${esc(b.book_ref)}</span>` : ''}
           ${b.vehicle_no ? `<span>${esc(b.vehicle_no)}</span>` : ''}
