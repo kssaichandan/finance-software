@@ -849,17 +849,27 @@ async function showDetail(borrowerId) {
     ? `<button class="btn btn-sm btn-outline" onclick="reopenLoan(${b.id})">🔓 Re-open Loan</button>`
     : `<button class="btn btn-sm btn-success" onclick="confirmCloseLoan(${b.id})">✔ Mark Closed</button>`;
 
-  // Penalty alert: loan has run PAST its agreed period and money is still owed.
+  // Penalty alert near the name. Two cases:
+  //   1. Loan still running, past its period, money still owed -> PENALTY DUE
+  //   2. Loan cleared, but the final payment came after the due date -> PAID LATE
+  //      (this one stays forever as a permanent record).
   let penaltyAlert = '';
-  if (b.loan_date && b.period_months && !s.closed && s.remaining > 0.01) {
+  if (b.loan_date && b.period_months) {
     const lastDue = jsAddMonths(b.loan_date, b.period_months);
     const todayStr = new Date().toISOString().split('T')[0];
-    if (todayStr > lastDue) {
+    if (!s.closed && s.remaining > 0.01 && todayStr > lastDue) {
       const monthsOver = jsMonthsElapsed(lastDue, todayStr);
       const detail = monthsOver >= 1
         ? `${monthsOver} month${monthsOver > 1 ? 's' : ''} past loan period`
         : 'past loan period';
       penaltyAlert = `<div class="penalty-alert">⚠ PENALTY DUE — ${detail}
+        &nbsp;·&nbsp; loan was due ${fmtDate(lastDue)}</div>`;
+    } else if (s.last_payment_date && s.last_payment_date > lastDue) {
+      const monthsLate = jsMonthsElapsed(lastDue, s.last_payment_date);
+      const detail = monthsLate >= 1
+        ? `cleared ${monthsLate} month${monthsLate > 1 ? 's' : ''} after loan period`
+        : 'cleared after loan period';
+      penaltyAlert = `<div class="penalty-alert">⚠ PAID LATE — ${detail}
         &nbsp;·&nbsp; loan was due ${fmtDate(lastDue)}</div>`;
     }
   }
