@@ -31,15 +31,23 @@ function money(v) {
   return (neg ? '-' : '') + '₹' + result;
 }
 
-function pct(paid, total) {
-  if (!total) return 0;
-  return Math.min(100, Math.round((paid / total) * 100));
+// Format an installment count: whole numbers plain, otherwise 1 decimal.
+function fmtInst(n) {
+  const r = Math.round(n * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
 }
 
-function progressBar(paid, total) {
-  const p = pct(paid, total);
-  const cls = p >= 100 ? 'success' : p < 50 ? 'danger' : '';
-  return `<div class="progress-wrap"><div class="progress-bar ${cls}" style="width:${p}%"></div></div> <span style="font-size:11px;color:var(--text-muted)">${p}%</span>`;
+// "5 paid · 7 left" — installments done vs remaining, based on money paid.
+function installmentText(s) {
+  const emi = s.installment_amount || 0;
+  const period = s.period_months || 0;
+  if (emi <= 0 || period <= 0) return '—';
+  const doneRaw = (s.total_paid || 0) / emi;
+  const done = Math.min(doneRaw, period);            // never more than the full period
+  const left = Math.max(0, period - doneRaw);        // never below zero
+  return `<span class="inst-done">${fmtInst(done)} paid</span>`
+       + `<span class="inst-sep"> · </span>`
+       + `<span class="inst-left">${fmtInst(left)} left</span>`;
 }
 
 function badge(status) {
@@ -414,7 +422,7 @@ async function renderBorrowers() {
           <thead>
             <tr>
               <th>Book Ref</th><th>Name</th><th>Phone</th><th>Vehicle No</th><th>Loan Date</th>
-              <th>Principal</th><th>Progress</th><th>Overdue</th><th>Status</th>
+              <th>Principal</th><th>Installments</th><th>Overdue</th><th>Status</th>
             </tr>
           </thead>
           <tbody id="borrow-tbody"></tbody>
@@ -515,7 +523,7 @@ function filterBorrowers(q) {
       <td><code style="font-size:12px">${esc(s.vehicle_no) || '—'}</code></td>
       <td>${fmtDate(s.loan_date)}</td>
       <td>${money(s.loan_amount)}</td>
-      <td>${progressBar(s.total_paid, s.total_payable)}</td>
+      <td>${installmentText(s)}</td>
       <td>${overdueTd}</td>
       <td>${badge(s.status_label)}</td>
     `;
@@ -936,7 +944,7 @@ async function showDetail(borrowerId) {
         <div class="summary-row"><span class="summary-key">Total Payable</span><span class="summary-val">${money(s.total_payable)}</span></div>
         <div class="summary-row"><span class="summary-key">Paid So Far</span><span class="summary-val primary">${money(s.total_paid)}</span></div>
         <div class="summary-row"><span class="summary-key">Remaining</span><span class="summary-val">${money(s.remaining)}</span></div>
-        <div class="summary-row"><span class="summary-key">Progress</span><span class="summary-val">${progressBar(s.total_paid, s.total_payable)}</span></div>
+        <div class="summary-row"><span class="summary-key">Installments</span><span class="summary-val">${installmentText(s)}</span></div>
         <div class="summary-row"><span class="summary-key">Expected by Today</span><span class="summary-val">${money(s.expected_paid_by_today)}</span></div>
         <div class="summary-row">
           <span class="summary-key">Overdue Amount</span>

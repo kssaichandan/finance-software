@@ -195,6 +195,11 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 .info-val { color: var(--text); font-weight: 500; word-break: break-word; }
 .info-val.val-red { color: var(--danger); font-weight: 700; }
 
+/* Installments done / left text */
+.inst-done { color: var(--success); font-weight: 600; }
+.inst-left { color: var(--text-muted); font-weight: 600; }
+.inst-sep { color: var(--border); }
+
 /* Penalty-due alert near borrower name */
 .penalty-alert {
   display: inline-block;
