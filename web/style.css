@@ -97,8 +97,10 @@ table.data-table { width: 100%; border-collapse: collapse; }
 .data-table tbody tr.row-overdue:hover { background: #fee2e2; }
 .data-table tbody tr.row-advance { background: var(--success-light); }
 .data-table tbody tr.row-advance:hover { background: #dcfce7; }
-.data-table tbody tr.row-closed { opacity: 0.55; }
+.data-table tbody tr.row-closed { opacity: 0.7; }
 .data-table tbody tr.row-closed:hover { background: var(--gray-light); }
+/* Closed borrower names shown in violet */
+.data-table tbody tr.row-closed td strong { color: #7c3aed; }
 .data-table .no-data td { text-align: center; color: var(--text-muted); padding: 48px; }
 
 /* ── Badges ───────────────────────────────────────────────────── */
@@ -191,6 +193,7 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 .info-row { display: flex; gap: 8px; font-size: 13px; }
 .info-key { color: var(--text-muted); min-width: 110px; flex-shrink: 0; }
 .info-val { color: var(--text); font-weight: 500; word-break: break-word; }
+.info-val.val-red { color: var(--danger); font-weight: 700; }
 .summary-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
 .summary-row:last-child { border-bottom: none; }
 .summary-key { color: var(--text-muted); }

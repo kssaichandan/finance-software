@@ -871,7 +871,7 @@ async function showDetail(borrowerId) {
           ${infoRow('Loan Date', fmtDate(b.loan_date))}
           ${infoRow('Period', `${b.period_months} months`)}
           ${infoRow('Last Payment Due', b.loan_date && b.period_months
-              ? fmtDate(jsAddMonths(b.loan_date, b.period_months)) : null)}
+              ? fmtDate(jsAddMonths(b.loan_date, b.period_months)) : null, 'val-red')}
           ${infoRow('Principal', money(b.loan_amount))}
           ${infoRow('Interest', `${b.interest_rate}% per year`)}
           ${infoRow('Installment', money(b.installment_amount))}
@@ -933,9 +933,10 @@ async function showDetail(borrowerId) {
   openModal();
 }
 
-function infoRow(key, val) {
+function infoRow(key, val, valClass) {
   if (!val) return '';
-  return `<div class="info-row"><span class="info-key">${esc(key)}</span><span class="info-val">${esc(val)}</span></div>`;
+  const cls = valClass ? ` ${valClass}` : '';
+  return `<div class="info-row"><span class="info-key">${esc(key)}</span><span class="info-val${cls}">${esc(val)}</span></div>`;
 }
 
 // ── Add Payment / Penalty modals ─────────────────────────────────
