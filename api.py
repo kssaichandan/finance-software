@@ -184,6 +184,48 @@ class API:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def add_payments_batch(self, borrower_id: int, payments: list) -> dict:
+        """Add several payments at once. Validates ALL entries first; if any
+        check fails nothing is inserted. The DB insert itself is one
+        transaction, so it is also all-or-nothing."""
+        try:
+            bid = int(borrower_id)
+            if not payments:
+                return {"success": False, "error": "No payments to add."}
+            seen: set = set()
+            cleaned = []
+            for idx, p in enumerate(payments, 1):
+                amount = float(p["amount"])
+                if amount <= 0:
+                    return {"success": False,
+                            "error": f"Payment {idx}: amount must be greater than 0."}
+                if not p.get("payment_date"):
+                    return {"success": False,
+                            "error": f"Payment {idx}: payment date is required."}
+                receipt = (p.get("receipt_no") or "").strip()
+                if receipt:
+                    low = receipt.lower()
+                    if low in seen:
+                        return {"success": False,
+                                "error": f"Payment {idx}: Receipt No '{receipt}' "
+                                         f"is repeated within this batch."}
+                    if db.payment_receipt_exists(receipt):
+                        return {"success": False,
+                                "error": f"Payment {idx}: Receipt No '{receipt}' "
+                                         f"is already used in another payment."}
+                    seen.add(low)
+                cleaned.append({
+                    "payment_date": p["payment_date"],
+                    "amount": amount,
+                    "receipt_no": receipt,
+                    "installment_label": p.get("installment_label", ""),
+                    "notes": p.get("notes", ""),
+                })
+            ids = db.add_payments_many(bid, cleaned)
+            return {"success": True, "ids": ids, "count": len(ids)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def add_penalty(self, data: dict) -> dict:
         try:
             pid = db.add_penalty(

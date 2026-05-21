@@ -194,6 +194,11 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 .info-key { color: var(--text-muted); min-width: 110px; flex-shrink: 0; }
 .info-val { color: var(--text); font-weight: 500; word-break: break-word; }
 .info-val.val-red { color: var(--danger); font-weight: 700; }
+
+/* Multi-payment Add Payment modal */
+.pay-blocks-wrap { max-height: 46vh; overflow-y: auto; padding-right: 4px; }
+.pay-block { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.pay-block-title { font-size: 13px; font-weight: 700; color: var(--primary); margin-bottom: 8px; }
 .summary-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
 .summary-row:last-child { border-bottom: none; }
 .summary-key { color: var(--text-muted); }

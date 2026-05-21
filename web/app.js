@@ -940,58 +940,103 @@ function infoRow(key, val, valClass) {
 }
 
 // ── Add Payment / Penalty modals ─────────────────────────────────
+const MAX_PAYMENTS_AT_ONCE = 12;
+
 function showAddPayment(borrowerId) {
   const today = todayDDMMYY();
-  document.getElementById('modal-inner').innerHTML = `
-    <div class="mini-modal">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-        <h3>Add Payment</h3>
-        <button class="modal-close" onclick="showDetail(${borrowerId})">✕</button>
-      </div>
-      <form onsubmit="submitPayment(event, ${borrowerId})">
-        <div class="form-grid" style="margin-bottom:16px">
+  let blocks = '';
+  for (let i = 1; i <= MAX_PAYMENTS_AT_ONCE; i++) {
+    blocks += `
+      <div class="pay-block" id="pay-block-${i}" style="${i > 1 ? 'display:none' : ''}">
+        <div class="pay-block-title">Payment ${i}</div>
+        <div class="form-grid">
           <div class="form-group">
             <label>Payment Date <span class="req">*</span></label>
-            <input class="form-control" name="payment_date" type="text" required maxlength="10"
+            <input class="form-control" name="payment_date_${i}" type="text" maxlength="10"
               placeholder="dd-mm-yy" inputmode="numeric"
               oninput="validateDateInput(this)" value="${today}" />
           </div>
           <div class="form-group">
             <label>Receipt No</label>
-            <input class="form-control" name="receipt_no" placeholder="Receipt number" />
+            <input class="form-control" name="receipt_no_${i}" placeholder="Receipt number" />
           </div>
           <div class="form-group">
             <label>Amount (₹) <span class="req">*</span></label>
-            <input class="form-control" name="amount" type="number" min="1" required placeholder="e.g. 7750" />
+            <input class="form-control" name="amount_${i}" type="number" min="1" placeholder="e.g. 7750" />
           </div>
           <div class="form-group">
             <label>Installment Label</label>
-            <input class="form-control" name="installment_label" placeholder="e.g. 1st, 4-5, 10th" />
+            <input class="form-control" name="installment_label_${i}" placeholder="e.g. 1st, 2nd" />
           </div>
           <div class="form-group form-full">
             <label>Notes</label>
-            <input class="form-control" name="notes" placeholder="Optional notes" />
+            <input class="form-control" name="notes_${i}" placeholder="Optional notes" />
           </div>
         </div>
-        <div style="display:flex;gap:10px">
-          <button type="submit" class="btn btn-primary">Save Payment</button>
+      </div>`;
+  }
+  let countOpts = '';
+  for (let i = 1; i <= MAX_PAYMENTS_AT_ONCE; i++) {
+    countOpts += `<option value="${i}">${i}</option>`;
+  }
+
+  document.getElementById('modal-inner').innerHTML = `
+    <div class="mini-modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3>Add Payment</h3>
+        <button class="modal-close" onclick="showDetail(${borrowerId})">✕</button>
+      </div>
+      <div class="form-group" style="margin-bottom:14px;max-width:280px">
+        <label>How many payments to add at once?</label>
+        <select class="form-control" id="pay-count-select" onchange="setPaymentCount(this.value)">
+          ${countOpts}
+        </select>
+      </div>
+      <form onsubmit="submitPaymentBatch(event, ${borrowerId})">
+        <div class="pay-blocks-wrap">${blocks}</div>
+        <div style="display:flex;gap:10px;margin-top:16px">
+          <button type="submit" class="btn btn-primary">Save All Payments</button>
           <button type="button" class="btn btn-outline" onclick="showDetail(${borrowerId})">Cancel</button>
         </div>
       </form>
     </div>`;
 }
 
-async function submitPayment(e, borrowerId) {
+function setPaymentCount(n) {
+  n = parseInt(n, 10) || 1;
+  for (let i = 1; i <= MAX_PAYMENTS_AT_ONCE; i++) {
+    const block = document.getElementById('pay-block-' + i);
+    if (block) block.style.display = i <= n ? '' : 'none';
+  }
+}
+
+async function submitPaymentBatch(e, borrowerId) {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const data = { borrower_id: borrowerId };
-  fd.forEach((v, k) => { data[k] = v; });
-  const iso = parseUserDate(data.payment_date);
-  if (!iso) { toast('Payment Date invalid. Use dd-mm-yy.', 'error'); return; }
-  data.payment_date = iso;
-  const result = await api('add_payment', data);
-  if (result.success) { _viewDirty = true; toast('Payment saved!', 'success'); showDetail(borrowerId); }
-  else toast('Error: ' + result.error, 'error');
+  const count = parseInt(document.getElementById('pay-count-select').value, 10) || 1;
+  const payments = [];
+  for (let i = 1; i <= count; i++) {
+    const dateRaw = (document.querySelector(`[name=payment_date_${i}]`).value || '').trim();
+    const amountRaw = (document.querySelector(`[name=amount_${i}]`).value || '').trim();
+    const iso = parseUserDate(dateRaw);
+    if (!iso) { toast(`Payment ${i}: date is invalid. Use dd-mm-yy.`, 'error'); return; }
+    const amount = parseFloat(amountRaw);
+    if (!amount || amount <= 0) { toast(`Payment ${i}: enter a valid amount.`, 'error'); return; }
+    payments.push({
+      payment_date: iso,
+      amount: amount,
+      receipt_no: document.querySelector(`[name=receipt_no_${i}]`).value,
+      installment_label: document.querySelector(`[name=installment_label_${i}]`).value,
+      notes: document.querySelector(`[name=notes_${i}]`).value,
+    });
+  }
+  const r = await api('add_payments_batch', borrowerId, payments);
+  if (r.success) {
+    _viewDirty = true;
+    toast(`${r.count} payment(s) saved!`, 'success');
+    showDetail(borrowerId);
+  } else {
+    toast('Error: ' + r.error, 'error');
+  }
 }
 
 function showAddPenalty(borrowerId) {

@@ -215,6 +215,22 @@ def add_payment(borrower_id: int, payment_date: str, amount: float,
         return cur.lastrowid
 
 
+def add_payments_many(borrower_id: int, rows: list) -> list:
+    """Insert several payments in ONE transaction. If any row fails, the whole
+    batch is rolled back (the `with connect()` block does not commit on error)."""
+    ids = []
+    with connect() as conn:
+        for r in rows:
+            cur = conn.execute(
+                "INSERT INTO payments (borrower_id, payment_date, receipt_no, "
+                "amount, installment_label, notes) VALUES (?, ?, ?, ?, ?, ?)",
+                (borrower_id, r["payment_date"], r.get("receipt_no", ""),
+                 r["amount"], r.get("installment_label", ""), r.get("notes", "")),
+            )
+            ids.append(cur.lastrowid)
+    return ids
+
+
 def list_payments(borrower_id: int) -> list[sqlite3.Row]:
     with connect() as conn:
         return conn.execute(
