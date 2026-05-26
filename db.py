@@ -31,6 +31,9 @@ _PAYMENT_COLS = frozenset({
 _PENALTY_COLS = frozenset({
     "charge_date", "receipt_no", "amount", "notes",
 })
+_SEIZING_COLS = frozenset({
+    "seizing_date", "amount", "reason",
+})
 
 
 def _validate_cols(data: dict, allowed: frozenset, table: str) -> None:
@@ -90,8 +93,18 @@ CREATE TABLE IF NOT EXISTS penalties (
     created_at          TEXT    DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS seizings (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    borrower_id         INTEGER NOT NULL REFERENCES borrowers(id) ON DELETE CASCADE,
+    seizing_date        TEXT    NOT NULL,
+    amount              REAL    NOT NULL,
+    reason              TEXT,
+    created_at          TEXT    DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_payments_borrower ON payments(borrower_id);
 CREATE INDEX IF NOT EXISTS idx_penalties_borrower ON penalties(borrower_id);
+CREATE INDEX IF NOT EXISTS idx_seizings_borrower ON seizings(borrower_id);
 """
 
 
@@ -338,9 +351,63 @@ def update_penalty(penalty_id: int, data: dict) -> None:
 
 
 def delete_borrower(borrower_id: int) -> None:
-    """Delete a borrower and all their payments/penalties (CASCADE via FK)."""
+    """Delete a borrower and all their payments/penalties/seizings (CASCADE via FK)."""
     with connect() as conn:
         conn.execute("DELETE FROM borrowers WHERE id = ?", (borrower_id,))
+
+
+def add_seizing(borrower_id: int, seizing_date: str, amount: float,
+                reason: str = "") -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO seizings
+               (borrower_id, seizing_date, amount, reason)
+               VALUES (?, ?, ?, ?)""",
+            (borrower_id, seizing_date, amount, reason),
+        )
+        return cur.lastrowid
+
+
+def list_seizings(borrower_id: int) -> list[sqlite3.Row]:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM seizings WHERE borrower_id = ? ORDER BY seizing_date, id",
+            (borrower_id,),
+        ).fetchall()
+
+
+def sum_seizings(borrower_id: int) -> float:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM seizings WHERE borrower_id = ?",
+            (borrower_id,),
+        ).fetchone()
+        return float(row["total"])
+
+
+def all_seizing_sums() -> dict[int, float]:
+    """Return {borrower_id: total_seizings} in one query."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT borrower_id, COALESCE(SUM(amount), 0) AS total "
+            "FROM seizings GROUP BY borrower_id"
+        ).fetchall()
+        return {r["borrower_id"]: float(r["total"]) for r in rows}
+
+
+def delete_seizing(seizing_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM seizings WHERE id = ?", (seizing_id,))
+
+
+def update_seizing(seizing_id: int, data: dict) -> None:
+    _validate_cols(data, _SEIZING_COLS, "seizings")
+    assignments = ", ".join(f"{k} = ?" for k in data.keys())
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE seizings SET {assignments} WHERE id = ?",
+            (*data.values(), seizing_id),
+        )
 
 
 def distinct_values(column: str) -> list[str]:

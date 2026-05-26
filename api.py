@@ -28,6 +28,7 @@ def _summary(s: models.LoanSummary) -> dict:
         "total_payable": s.total_payable,
         "total_paid": s.total_paid,
         "total_penalties": s.total_penalties,
+        "total_seizings": s.total_seizings,
         "remaining": s.remaining,
         "expected_paid_by_today": s.expected_paid_by_today,
         "overdue_amount": s.overdue_amount,
@@ -93,11 +94,13 @@ class API:
         s = models.compute_summary(b)
         payments = [_row(p) for p in db.list_payments(borrower_id)]
         penalties = [_row(p) for p in db.list_penalties(borrower_id)]
+        seizings = [_row(p) for p in db.list_seizings(borrower_id)]
         return {
             "borrower": _row(b),
             "summary": _summary(s),
             "payments": payments,
             "penalties": penalties,
+            "seizings": seizings,
         }
 
     # ---- Add / edit borrower ---------------------------------------------
@@ -274,6 +277,60 @@ class API:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # ---- Seizing money (O/D recovery costs) ------------------------------
+
+    def add_seizing(self, data: dict) -> dict:
+        try:
+            sid = db.add_seizing(
+                borrower_id=int(data["borrower_id"]),
+                seizing_date=data["seizing_date"],
+                amount=float(data["amount"]),
+                reason=data.get("reason", ""),
+            )
+            return {"success": True, "id": sid}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def delete_seizing(self, seizing_id: int) -> dict:
+        try:
+            db.delete_seizing(int(seizing_id))
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def update_seizing(self, seizing_id: int, data: dict) -> dict:
+        try:
+            data["amount"] = float(data["amount"])
+            db.update_seizing(int(seizing_id), data)
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ---- Bulk fetch for PDF export ---------------------------------------
+
+    def get_borrowers_full(self, ids: list) -> dict:
+        """Return borrower + summary + payments + penalties + seizings for
+        each requested ID. Used by the PDF export so the browser doesn't have
+        to make N round trips to build the print document."""
+        try:
+            wanted = [int(i) for i in ids]
+            result = []
+            for bid in wanted:
+                b = db.get_borrower(bid)
+                if not b:
+                    continue
+                s = models.compute_summary(b)
+                result.append({
+                    "borrower": _row(b),
+                    "summary": _summary(s),
+                    "payments": [_row(p) for p in db.list_payments(bid)],
+                    "penalties": [_row(p) for p in db.list_penalties(bid)],
+                    "seizings": [_row(p) for p in db.list_seizings(bid)],
+                })
+            return {"success": True, "data": result}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     # ---- Due soon --------------------------------------------------------
 
     def get_due_soon(self, days: int = 7) -> list:
@@ -314,6 +371,9 @@ class API:
             total_penalties = float(
                 conn.execute("SELECT COALESCE(SUM(amount),0) FROM penalties").fetchone()[0]
             )
+            total_seizings = float(
+                conn.execute("SELECT COALESCE(SUM(amount),0) FROM seizings").fetchone()[0]
+            )
 
         summaries = models.all_summaries()
         overdue_count = sum(1 for s in summaries if s.is_overdue)
@@ -328,6 +388,7 @@ class API:
             "total_collected": total_collected,
             "total_outstanding": max(0.0, total_payable - total_collected),
             "total_penalties": total_penalties,
+            "total_seizings": total_seizings,
             "overdue_count": overdue_count,
             "total_overdue_amount": total_overdue_amt,
         }
@@ -344,12 +405,13 @@ class API:
         try:
             summaries = models.all_summaries()
             overdue = [s for s in summaries if s.is_overdue]
+            seiz_sums = db.all_seizing_sums()
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
                 w.writerow([
                     "Name", "Phone", "Alt Phone", "Vehicle No", "Loan Date",
                     "Days Overdue", "Overdue Amount (Rs)",
-                    "Remaining (Rs)", "Last Payment",
+                    "Remaining (Rs)", "Seizing Money Total (Rs)", "Last Payment",
                     "Address", "Guarantor", "Guarantor Phone", "Guarantor Alt Phone",
                 ])
                 for s in overdue:
@@ -360,6 +422,7 @@ class API:
                         s.loan_date.strftime("%d-%m-%y"),
                         s.days_overdue, int(round(s.overdue_amount)),
                         int(round(s.remaining)),
+                        int(round(seiz_sums.get(s.borrower_id, 0.0))),
                         s.last_payment_date or "",
                         b["address"] or "", b["guarantor_name"] or "",
                         b["guarantor_phone"] or "",

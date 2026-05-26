@@ -17,6 +17,7 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # OS
 Thumbs.db

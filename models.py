@@ -44,6 +44,7 @@ class LoanSummary:
     total_payable: float
     total_paid: float
     total_penalties: float
+    total_seizings: float
     remaining: float
     expected_paid_by_today: float
     overdue_amount: float
@@ -76,10 +77,11 @@ class LoanSummary:
 def compute_summary(borrower_row, today: date | None = None,
                     pay_sums: dict | None = None,
                     pen_sums: dict | None = None,
-                    last_pays: dict | None = None) -> LoanSummary:
-    """Compute a loan summary. If pay_sums/pen_sums/last_pays dicts are passed,
-    use them instead of per-borrower DB queries — used by all_summaries() to
-    avoid an N+1 pattern across many borrowers."""
+                    last_pays: dict | None = None,
+                    seiz_sums: dict | None = None) -> LoanSummary:
+    """Compute a loan summary. If pay_sums/pen_sums/last_pays/seiz_sums dicts
+    are passed, use them instead of per-borrower DB queries — used by
+    all_summaries() to avoid an N+1 pattern across many borrowers."""
     if today is None:
         today = date.today()
 
@@ -100,6 +102,8 @@ def compute_summary(borrower_row, today: date | None = None,
         0.0 if pay_sums is not None else db.sum_payments(bid))
     total_penalties = pen_sums[bid] if pen_sums is not None and bid in pen_sums else (
         0.0 if pen_sums is not None else db.sum_penalties(bid))
+    total_seizings = seiz_sums[bid] if seiz_sums is not None and bid in seiz_sums else (
+        0.0 if seiz_sums is not None else db.sum_seizings(bid))
     remaining = max(0.0, total_payable - total_paid)
 
     elapsed = months_elapsed(loan_date, today)
@@ -133,6 +137,7 @@ def compute_summary(borrower_row, today: date | None = None,
         total_payable=total_payable,
         total_paid=total_paid,
         total_penalties=total_penalties,
+        total_seizings=total_seizings,
         remaining=remaining,
         expected_paid_by_today=expected_paid_by_today,
         overdue_amount=overdue_amount,
@@ -161,7 +166,8 @@ def all_summaries(today: date | None = None) -> list[LoanSummary]:
     pay_sums = db.all_payment_sums()
     pen_sums = db.all_penalty_sums()
     last_pays = db.all_last_payment_dates()
-    return [compute_summary(r, today, pay_sums, pen_sums, last_pays) for r in rows]
+    seiz_sums = db.all_seizing_sums()
+    return [compute_summary(r, today, pay_sums, pen_sums, last_pays, seiz_sums) for r in rows]
 
 
 def due_soon(days: int = 7, today: date | None = None) -> list[dict]:

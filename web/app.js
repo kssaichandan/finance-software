@@ -171,6 +171,11 @@ function hasPenalty(s) {
   return false;
 }
 
+// True if any seizing money has been recorded against this borrower.
+function hasSeizing(s) {
+  return (s.total_seizings || 0) > 0.001;
+}
+
 // ── Navigation ───────────────────────────────────────────────────
 async function navigate(view) {
   currentView = view;
@@ -378,6 +383,7 @@ async function renderBorrowers() {
         <option value="everything" ${statusFilter==='everything'  ?'selected':''}>All Borrowers (Active + Closed)</option>
         <option value="all"         ${statusFilter==='all'         ?'selected':''}>Active Only</option>
         <option value="penalty"     ${statusFilter==='penalty'     ?'selected':''}>Has Penalty (Due or Paid Late)</option>
+        <option value="seizing"     ${statusFilter==='seizing'     ?'selected':''}>Has Seizing Money</option>
         <option value="overdue"     ${statusFilter==='overdue'     ?'selected':''}>Overdue (any)</option>
         <option value="od_1m"       ${statusFilter==='od_1m'       ?'selected':''}>Overdue > 1 month (30+ days)</option>
         <option value="od_2m"       ${statusFilter==='od_2m'       ?'selected':''}>Overdue > 2 months (60+ days)</option>
@@ -415,6 +421,10 @@ async function renderBorrowers() {
           onchange="toggleClosed(this.checked)" />
         + Closed
       </label>
+      <button class="btn btn-outline btn-sm" onclick="exportBorrowersPDF()"
+        title="Export the currently-filtered borrowers list as a PDF (uses Edge print → Save as PDF)">
+        📄 Export to PDF
+      </button>
     </div>
     <div class="card">
       <div class="table-wrap table-scroll-full">
@@ -435,6 +445,88 @@ async function renderBorrowers() {
   filterBorrowers(searchQuery);
 }
 
+// Pure predicate — true if a summary should be shown given current filter+search.
+// Factored out so both the Borrowers list and the PDF export use the exact same logic.
+function passesBorrowerFilter(s, today, q) {
+  if (statusFilter === 'everything') {
+    // show all borrowers — active and closed, no status filtering
+  } else if (statusFilter === 'all') {
+    if (!showClosed && s.closed) return false;
+  } else if (statusFilter === 'penalty') {
+    if (!hasPenalty(s)) return false;
+  } else if (statusFilter === 'seizing') {
+    if (!hasSeizing(s)) return false;
+  } else if (statusFilter === 'overdue') {
+    if (!s.is_overdue) return false;
+  } else if (statusFilter === 'od_1m') {
+    if (!s.is_overdue || s.days_overdue < 30) return false;
+  } else if (statusFilter === 'od_2m') {
+    if (!s.is_overdue || s.days_overdue < 60) return false;
+  } else if (statusFilter === 'od_3m') {
+    if (!s.is_overdue || s.days_overdue < 90) return false;
+  } else if (statusFilter === 'od_1k') {
+    if (!s.is_overdue || s.overdue_amount < 1000) return false;
+  } else if (statusFilter === 'od_5k') {
+    if (!s.is_overdue || s.overdue_amount < 5000) return false;
+  } else if (statusFilter === 'od_custom') {
+    if (!s.is_overdue) return false;
+    if (customMinDays > 0 || customMinAmount > 0) {
+      const okDays = customMinDays > 0 && s.days_overdue >= customMinDays;
+      const okAmt = customMinAmount > 0 && s.overdue_amount >= customMinAmount;
+      if (!okDays && !okAmt) return false;
+    }
+  } else if (statusFilter === 'ontime') {
+    if (s.closed || s.is_overdue || s.is_advance) return false;
+  } else if (statusFilter === 'advance') {
+    if (!s.is_advance) return false;
+  } else if (statusFilter === 'closed') {
+    if (!s.closed) return false;
+  } else {
+    const nd = nextDueDateFor(s);
+    if (!nd) return false;
+    const daysUntil = Math.round((new Date(nd) - new Date(today)) / 86400000);
+    if (statusFilter === 'due_today'    && daysUntil !== 0) return false;
+    if (statusFilter === 'due_tomorrow' && daysUntil !== 1) return false;
+    if (statusFilter === 'due_3days'    && (daysUntil < 0 || daysUntil > 3)) return false;
+    if (statusFilter === 'due_7days'    && (daysUntil < 0 || daysUntil > 7)) return false;
+    if (statusFilter === 'pick_date'    && pickDate && nd !== pickDate) return false;
+  }
+  if (!q) return true;
+  const lq = q.toLowerCase();
+  return (s.name || '').toLowerCase().includes(lq)
+    || (s.phone || '').toLowerCase().includes(lq)
+    || (s.vehicle_no || '').toLowerCase().includes(lq)
+    || (s.book_ref || '').toLowerCase().includes(lq);
+}
+
+// Human-readable label for the active filter — used as the PDF heading.
+function currentFilterLabel() {
+  const map = {
+    everything: 'All Borrowers (Active + Closed)',
+    all: showClosed ? 'Active + Closed' : 'Active Only',
+    penalty: 'Has Penalty (Due or Paid Late)',
+    seizing: 'Has Seizing Money',
+    overdue: 'Overdue (any)',
+    od_1m: 'Overdue > 1 month (30+ days)',
+    od_2m: 'Overdue > 2 months (60+ days)',
+    od_3m: 'Overdue > 3 months (90+ days)',
+    od_1k: 'Overdue > ₹1,000',
+    od_5k: 'Overdue > ₹5,000',
+    od_custom: `Custom overdue (min ${customMinDays || 0} days OR ₹${customMinAmount || 0})`,
+    ontime: 'On Time',
+    advance: 'Advance',
+    closed: 'Closed',
+    due_today: 'Due Today',
+    due_tomorrow: 'Due Tomorrow',
+    due_3days: 'Due in next 3 days',
+    due_7days: 'Due in next 7 days',
+    pick_date: `Due on ${pickDate ? fmtDate(pickDate) : '—'}`,
+  };
+  let label = map[statusFilter] || statusFilter;
+  if (searchQuery) label += ` · search: "${searchQuery}"`;
+  return label;
+}
+
 function filterBorrowers(q) {
   searchQuery = q;
   const summaries = window._allSummaries || [];
@@ -442,58 +534,7 @@ function filterBorrowers(q) {
   if (!tbody) return;
   const today = new Date().toISOString().split('T')[0];
 
-  const rows = summaries.filter(s => {
-    // Status / date filter
-    if (statusFilter === 'everything') {
-      // show all borrowers — active and closed, no status filtering
-    } else if (statusFilter === 'all') {
-      if (!showClosed && s.closed) return false;
-    } else if (statusFilter === 'penalty') {
-      if (!hasPenalty(s)) return false;
-    } else if (statusFilter === 'overdue') {
-      if (!s.is_overdue) return false;
-    } else if (statusFilter === 'od_1m') {
-      if (!s.is_overdue || s.days_overdue < 30) return false;
-    } else if (statusFilter === 'od_2m') {
-      if (!s.is_overdue || s.days_overdue < 60) return false;
-    } else if (statusFilter === 'od_3m') {
-      if (!s.is_overdue || s.days_overdue < 90) return false;
-    } else if (statusFilter === 'od_1k') {
-      if (!s.is_overdue || s.overdue_amount < 1000) return false;
-    } else if (statusFilter === 'od_5k') {
-      if (!s.is_overdue || s.overdue_amount < 5000) return false;
-    } else if (statusFilter === 'od_custom') {
-      if (!s.is_overdue) return false;
-      // OR logic: must meet EITHER threshold (when set). If both are 0, show all overdue.
-      if (customMinDays > 0 || customMinAmount > 0) {
-        const okDays = customMinDays > 0 && s.days_overdue >= customMinDays;
-        const okAmt = customMinAmount > 0 && s.overdue_amount >= customMinAmount;
-        if (!okDays && !okAmt) return false;
-      }
-    } else if (statusFilter === 'ontime') {
-      if (s.closed || s.is_overdue || s.is_advance) return false;
-    } else if (statusFilter === 'advance') {
-      if (!s.is_advance) return false;
-    } else if (statusFilter === 'closed') {
-      if (!s.closed) return false;
-    } else {
-      const nd = nextDueDateFor(s);
-      if (!nd) return false;
-      const daysUntil = Math.round((new Date(nd) - new Date(today)) / 86400000);
-      if (statusFilter === 'due_today'    && daysUntil !== 0) return false;
-      if (statusFilter === 'due_tomorrow' && daysUntil !== 1) return false;
-      if (statusFilter === 'due_3days'    && (daysUntil < 0 || daysUntil > 3)) return false;
-      if (statusFilter === 'due_7days'    && (daysUntil < 0 || daysUntil > 7)) return false;
-      if (statusFilter === 'pick_date'    && pickDate && nd !== pickDate) return false;
-    }
-    // Text search
-    if (!q) return true;
-    const lq = q.toLowerCase();
-    return (s.name || '').toLowerCase().includes(lq)
-      || (s.phone || '').toLowerCase().includes(lq)
-      || (s.vehicle_no || '').toLowerCase().includes(lq)
-      || (s.book_ref || '').toLowerCase().includes(lq);
-  });
+  const rows = summaries.filter(s => passesBorrowerFilter(s, today, q));
 
   const baseCount = statusFilter === 'all'
     ? summaries.filter(s => showClosed || !s.closed).length
@@ -536,6 +577,250 @@ function filterBorrowers(q) {
 function toggleClosed(val) {
   showClosed = val;
   filterBorrowers(searchQuery);
+}
+
+// ── PDF export of the currently-filtered borrowers list ──────────
+// Opens a new window with a dense print-styled report and auto-prints it.
+// User picks "Save as PDF" in the Edge print dialog (default option on Windows).
+async function exportBorrowersPDF() {
+  const summaries = window._allSummaries || [];
+  if (summaries.length === 0) {
+    toast('Borrowers list not loaded yet. Open the Borrowers page first.', 'error');
+    return;
+  }
+  const today = new Date().toISOString().split('T')[0];
+  const filtered = summaries.filter(s => passesBorrowerFilter(s, today, searchQuery));
+  if (filtered.length === 0) {
+    toast('No borrowers match the current filter — nothing to export.', 'error');
+    return;
+  }
+  loading(true);
+  let result;
+  try {
+    result = await api('get_borrowers_full', filtered.map(s => s.borrower_id));
+  } finally { loading(false); }
+  if (!result || !result.success) {
+    toast('Failed to fetch data: ' + (result && result.error || 'unknown'), 'error');
+    return;
+  }
+  const html = buildBorrowersPdfHtml(result.data, currentFilterLabel(), filtered.length);
+  const win = window.open('', '_blank', 'width=1100,height=800');
+  if (!win) {
+    toast('Pop-up blocked. Allow pop-ups for this app and try again.', 'error');
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+// Build the full HTML document (with embedded CSS + auto-print script) for the
+// PDF window. Landscape A4, compact per-borrower cards including every key field
+// + full payments / penalties / seizings tables. Auto-fires window.print() once
+// the document is loaded so Edge's "Save as PDF" dialog appears immediately.
+function buildBorrowersPdfHtml(items, filterLabel, count) {
+  const todayStr = fmtDate(new Date().toISOString().split('T')[0]);
+  const cards = items.map((it, i) => borrowerPdfCard(it, i + 1)).join('');
+  return `<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Borrowers Export — ${esc(filterLabel)} — ${todayStr}</title>
+<style>
+  @page { size: A4 landscape; margin: 8mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font: 9pt 'Segoe UI','Nirmala UI',Arial,sans-serif; color: #111; }
+  .report-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 2px solid #333; padding-bottom: 3mm; margin-bottom: 4mm;
+  }
+  .report-header h1 { margin: 0; font-size: 14pt; }
+  .report-header .meta { font-size: 9pt; color: #555; text-align: right; line-height: 1.5; }
+  .toolbar {
+    display: flex; gap: 8px; margin-bottom: 4mm;
+  }
+  .toolbar button {
+    font: inherit; padding: 4px 12px; border: 1px solid #333; background: #f4f4f4;
+    border-radius: 3px; cursor: pointer;
+  }
+  @media print { .toolbar { display: none; } }
+  .card {
+    border: 1px solid #888; border-radius: 4px; padding: 3mm 4mm;
+    margin-bottom: 3mm; page-break-inside: avoid;
+  }
+  .card-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1px solid #ccc; padding-bottom: 1.5mm; margin-bottom: 2mm;
+  }
+  .card-head .name { font-size: 11pt; font-weight: 700; }
+  .card-head .name .sl { color: #666; font-weight: 500; margin-right: 2mm; }
+  .card-head .name .book { color: #666; font-weight: 500; font-size: 9pt; margin-left: 3mm; }
+  .card-head .status {
+    font-size: 8.5pt; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+    border: 1px solid #888;
+  }
+  .status.Overdue { color: #b00020; border-color: #b00020; }
+  .status.Closed  { color: #6b21a8; border-color: #6b21a8; }
+  .status.Advance { color: #15803d; border-color: #15803d; }
+  .status\\ On.time { color: #15803d; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1mm 6mm; margin-bottom: 1mm; }
+  .row.cols-2 { grid-template-columns: 1fr 1fr; }
+  .row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .kv { font-size: 8.5pt; }
+  .kv .k { color: #666; }
+  .kv .v { font-weight: 600; }
+  .kv .v.danger { color: #b00020; }
+  .section-title {
+    font-size: 8pt; font-weight: 700; color: #555;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-top: 2mm; margin-bottom: 1mm;
+  }
+  table.mini {
+    font-size: 8pt; width: 100%; border-collapse: collapse;
+  }
+  table.mini th, table.mini td {
+    padding: 0.6mm 2mm; border-bottom: 1px solid #ddd; text-align: left;
+  }
+  table.mini th { background: #f0f0f0; font-weight: 600; color: #444; }
+  table.mini td.amt { text-align: right; font-variant-numeric: tabular-nums; }
+  table.mini th.amt { text-align: right; }
+  .empty { font-size: 8pt; color: #888; font-style: italic; padding: 1mm 0; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button onclick="window.print()">🖨 Print / Save as PDF</button>
+    <button onclick="window.close()">Close</button>
+  </div>
+  <div class="report-header">
+    <h1>Borrowers Report — ${esc(filterLabel)}</h1>
+    <div class="meta">
+      <div><b>${count}</b> borrower${count===1?'':'s'}</div>
+      <div>Generated: ${todayStr}</div>
+    </div>
+  </div>
+  ${cards}
+  <script>
+    // Give the browser one paint frame to lay everything out, then trigger print.
+    window.addEventListener('load', () => setTimeout(() => window.print(), 300));
+  </script>
+</body></html>`;
+}
+
+function borrowerPdfCard(it, sl) {
+  const b = it.borrower, s = it.summary;
+  const pays = it.payments || [], pens = it.penalties || [], seiz = it.seizings || [];
+
+  const phoneCombined = [b.phone, b.phone2].filter(Boolean).join(' / ') || '—';
+  const guarPhoneCombined = [b.guarantor_phone, b.guarantor_phone2].filter(Boolean).join(' / ');
+  const guarLine = b.guarantor_name
+    ? `${esc(b.guarantor_name)}${guarPhoneCombined ? ` — ${esc(guarPhoneCombined)}` : ''}${b.guarantor_address ? `, ${esc(b.guarantor_address)}` : ''}`
+    : '—';
+  const lastDue = (b.loan_date && b.period_months)
+    ? fmtDate(jsAddMonths(b.loan_date, b.period_months)) : '—';
+  const statusClass = (s.status_label || '').replace(/\s/g, '.');
+
+  const payRows = pays.length > 0
+    ? pays.map(p => `
+        <tr>
+          <td>${fmtDate(p.payment_date)}</td>
+          <td>${esc(p.receipt_no) || '—'}</td>
+          <td>${esc(p.installment_label) || '—'}</td>
+          <td class="amt">${money(p.amount)}</td>
+          <td>${esc(p.notes) || ''}</td>
+        </tr>`).join('')
+    : '';
+  const penRows = pens.length > 0
+    ? pens.map(p => `
+        <tr>
+          <td>${fmtDate(p.charge_date)}</td>
+          <td>${esc(p.receipt_no) || '—'}</td>
+          <td class="amt">${money(p.amount)}</td>
+          <td>${esc(p.notes) || ''}</td>
+        </tr>`).join('')
+    : '';
+  const seizRows = seiz.length > 0
+    ? seiz.map(p => `
+        <tr>
+          <td>${fmtDate(p.seizing_date)}</td>
+          <td class="amt">${money(p.amount)}</td>
+          <td>${esc(p.reason) || ''}</td>
+        </tr>`).join('')
+    : '';
+
+  const odLine = s.is_overdue
+    ? `<span class="v danger">${money(s.overdue_amount)} (${s.days_overdue} days)</span>`
+    : `<span class="v">—</span>`;
+
+  return `
+  <div class="card">
+    <div class="card-head">
+      <div class="name">
+        <span class="sl">${sl}.</span>${esc(b.name) || '—'}
+        ${b.book_ref ? `<span class="book">📒 ${esc(b.book_ref)}</span>` : ''}
+      </div>
+      <div class="status ${statusClass}">${esc(s.status_label)}</div>
+    </div>
+
+    <div class="row cols-3">
+      <div class="kv"><span class="k">S/o:</span> <span class="v">${esc(b.father_name) || '—'}</span></div>
+      <div class="kv"><span class="k">Phone:</span> <span class="v">${esc(phoneCombined)}</span></div>
+      <div class="kv"><span class="k">Address:</span> <span class="v">${esc(b.address) || '—'}</span></div>
+    </div>
+
+    <div class="row cols-3">
+      <div class="kv"><span class="k">Vehicle:</span> <span class="v">${esc([b.vehicle_type, b.vehicle_no].filter(Boolean).join(' — ')) || '—'}</span></div>
+      <div class="kv"><span class="k">Engine / Chassis:</span> <span class="v">${esc([b.engine_no, b.chassis_no].filter(Boolean).join(' / ')) || '—'}</span></div>
+      <div class="kv"><span class="k">Key / S.No:</span> <span class="v">${esc([b.key_no, b.serial_no].filter(Boolean).join(' / ')) || '—'}</span></div>
+    </div>
+
+    <div class="row cols-4">
+      <div class="kv"><span class="k">Loan Date:</span> <span class="v">${fmtDate(b.loan_date)}</span></div>
+      <div class="kv"><span class="k">Period:</span> <span class="v">${b.period_months} months</span></div>
+      <div class="kv"><span class="k">Last Due:</span> <span class="v">${lastDue}</span></div>
+      <div class="kv"><span class="k">Interest:</span> <span class="v">${b.interest_rate}% / yr</span></div>
+    </div>
+
+    <div class="row cols-4">
+      <div class="kv"><span class="k">Principal:</span> <span class="v">${money(b.loan_amount)}</span></div>
+      <div class="kv"><span class="k">EMI:</span> <span class="v">${money(b.installment_amount)}</span></div>
+      <div class="kv"><span class="k">Total Payable:</span> <span class="v">${money(s.total_payable)}</span></div>
+      <div class="kv"><span class="k">Showroom:</span> <span class="v">${esc(b.showroom) || '—'}</span></div>
+    </div>
+
+    <div class="row cols-4">
+      <div class="kv"><span class="k">Paid:</span> <span class="v">${money(s.total_paid)} (${installmentText(s).replace(/<[^>]+>/g,'')})</span></div>
+      <div class="kv"><span class="k">Remaining:</span> <span class="v">${money(s.remaining)}</span></div>
+      <div class="kv"><span class="k">Overdue:</span> ${odLine}</div>
+      <div class="kv"><span class="k">Last Payment:</span> <span class="v">${fmtDate(s.last_payment_date) || '—'}</span></div>
+    </div>
+
+    <div class="row cols-3">
+      <div class="kv"><span class="k">Penalties Total:</span> <span class="v">${money(s.total_penalties)}</span></div>
+      <div class="kv"><span class="k">Seizing Money Total:</span> <span class="v">${money(s.total_seizings || 0)}</span></div>
+      <div class="kv"><span class="k">Guarantor:</span> <span class="v">${guarLine}</span></div>
+    </div>
+
+    ${pays.length > 0 ? `
+      <div class="section-title">Payments (${pays.length})</div>
+      <table class="mini">
+        <thead><tr><th>Date</th><th>Receipt</th><th>Inst #</th><th class="amt">Amount</th><th>Notes</th></tr></thead>
+        <tbody>${payRows}</tbody>
+      </table>` : `<div class="empty">No payments recorded.</div>`}
+
+    ${pens.length > 0 ? `
+      <div class="section-title">Penalties (${pens.length})</div>
+      <table class="mini">
+        <thead><tr><th>Date</th><th>Receipt</th><th class="amt">Amount</th><th>Notes</th></tr></thead>
+        <tbody>${penRows}</tbody>
+      </table>` : ''}
+
+    ${seiz.length > 0 ? `
+      <div class="section-title">Seizing Money (${seiz.length})</div>
+      <table class="mini">
+        <thead><tr><th>Date</th><th class="amt">Amount</th><th>Reason</th></tr></thead>
+        <tbody>${seizRows}</tbody>
+      </table>` : ''}
+  </div>`;
 }
 
 function setStatusFilter(val) {
@@ -837,7 +1122,7 @@ async function showDetail(borrowerId) {
   finally { loading(false); }
   if (!data) { toast('Borrower not found.', 'error'); return; }
 
-  const { borrower: b, summary: s, payments, penalties } = data;
+  const { borrower: b, summary: s, payments, penalties, seizings } = data;
 
   const statusColor = { Overdue: 'danger', 'On time': 'success', Advance: 'success', Closed: 'gray' };
   const sc = statusColor[s.status_label] || 'gray';
@@ -870,6 +1155,20 @@ async function showDetail(borrowerId) {
           </td>
         </tr>`).join('')
     : `<tr class="no-data"><td colspan="5">No penalties recorded.</td></tr>`;
+
+  const seizList = seizings || [];
+  const seizRows = seizList.length > 0
+    ? seizList.map(p => `
+        <tr>
+          <td>${fmtDate(p.seizing_date)}</td>
+          <td><strong>${money(p.amount)}</strong></td>
+          <td>${esc(p.reason) || '—'}</td>
+          <td class="action-cell">
+            <button class="btn btn-xs btn-outline" onclick="showEditSeizing(${p.id},${b.id})">✏</button>
+            <button class="btn btn-xs btn-danger-sm" onclick="deleteSeizing(${p.id},${b.id})">🗑</button>
+          </td>
+        </tr>`).join('')
+    : `<tr class="no-data"><td colspan="4">No seizing money recorded.</td></tr>`;
 
   const closedBtn = s.closed
     ? `<button class="btn btn-sm btn-outline" onclick="reopenLoan(${b.id})">🔓 Re-open Loan</button>`
@@ -956,6 +1255,7 @@ async function showDetail(borrowerId) {
         </div>
         <div class="summary-row"><span class="summary-key">Months Elapsed</span><span class="summary-val">${s.months_elapsed} / ${s.period_months}</span></div>
         <div class="summary-row"><span class="summary-key">Penalties Paid</span><span class="summary-val">${money(s.total_penalties)}</span></div>
+        <div class="summary-row"><span class="summary-key">Seizing Money</span><span class="summary-val">${money(s.total_seizings || 0)}</span></div>
         <div class="summary-row"><span class="summary-key">Last Payment</span><span class="summary-val">${fmtDate(s.last_payment_date) || '—'}</span></div>
       </div>
     </div>
@@ -963,6 +1263,7 @@ async function showDetail(borrowerId) {
     <div class="detail-actions">
       <button class="btn btn-sm btn-primary" onclick="showAddPayment(${b.id})">➕ Add Payment</button>
       <button class="btn btn-sm btn-outline" onclick="showAddPenalty(${b.id})">⚠ Add Penalty (O/D)</button>
+      <button class="btn btn-sm btn-outline" onclick="showAddSeizing(${b.id})">🚚 Add Seizing Money</button>
       <button class="btn btn-sm btn-outline" onclick="showPaymentSchedule(${b.id})">📅 Schedule</button>
       <button class="btn btn-sm btn-outline" onclick="closeModal(); navigate('add'); loadEditForm(${b.id})">✏ Edit</button>
       ${closedBtn}
@@ -985,6 +1286,15 @@ async function showDetail(borrowerId) {
           <table class="data-table">
             <thead><tr><th>Date</th><th>Receipt</th><th>Amount</th><th>Notes</th><th></th></tr></thead>
             <tbody>${penRows}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="detail-table-section">
+        <h4>Seizing Money (O/D)</h4>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Date</th><th>Amount</th><th>Reason</th><th></th></tr></thead>
+            <tbody>${seizRows}</tbody>
           </table>
         </div>
       </div>
@@ -1317,6 +1627,107 @@ async function submitEditPenalty(e, penaltyId, borrowerId) {
   else toast('Error: ' + r.error, 'error');
 }
 
+// ── Seizing money (O/D recovery costs) ───────────────────────────
+function showAddSeizing(borrowerId) {
+  const today = todayDDMMYY();
+  document.getElementById('modal-inner').innerHTML = `
+    <div class="mini-modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <h3>Add Seizing Money</h3>
+        <button class="modal-close" onclick="showDetail(${borrowerId})">✕</button>
+      </div>
+      <form onsubmit="submitSeizing(event, ${borrowerId})">
+        <div class="form-grid" style="margin-bottom:16px">
+          <div class="form-group">
+            <label>Date <span class="req">*</span></label>
+            <input class="form-control" name="seizing_date" type="text" required maxlength="10"
+              placeholder="dd-mm-yy" inputmode="numeric"
+              oninput="validateDateInput(this)" value="${today}" />
+          </div>
+          <div class="form-group">
+            <label>Amount (₹) <span class="req">*</span></label>
+            <input class="form-control" name="amount" type="number" min="1" required placeholder="e.g. 1500" />
+          </div>
+          <div class="form-group form-full">
+            <label>Reason</label>
+            <input class="form-control" name="reason" placeholder="e.g. towing, garage, recovery agent" />
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button type="submit" class="btn btn-danger">Save Seizing Money</button>
+          <button type="button" class="btn btn-outline" onclick="showDetail(${borrowerId})">Cancel</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+async function submitSeizing(e, borrowerId) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = { borrower_id: borrowerId };
+  fd.forEach((v, k) => { data[k] = v; });
+  const iso = parseUserDate(data.seizing_date);
+  if (!iso) { toast('Date invalid. Use dd-mm-yy.', 'error'); return; }
+  data.seizing_date = iso;
+  const result = await api('add_seizing', data);
+  if (result.success) { _viewDirty = true; toast('Seizing money saved!', 'success'); showDetail(borrowerId); }
+  else toast('Error: ' + result.error, 'error');
+}
+
+async function deleteSeizing(seizingId, borrowerId) {
+  if (!confirm('Delete this seizing money entry? This cannot be undone.')) return;
+  const r = await api('delete_seizing', seizingId);
+  if (r.success) { _viewDirty = true; toast('Seizing entry deleted.', 'success'); showDetail(borrowerId); }
+  else toast('Error: ' + r.error, 'error');
+}
+
+async function showEditSeizing(seizingId, borrowerId) {
+  const detail = await api('get_borrower_detail', borrowerId);
+  const p = (detail.seizings || []).find(x => x.id === seizingId);
+  if (!p) return;
+  document.getElementById('modal-inner').innerHTML = `
+    <div class="mini-modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <h3>Edit Seizing Money</h3>
+        <button class="modal-close" onclick="showDetail(${borrowerId})">✕</button>
+      </div>
+      <form onsubmit="submitEditSeizing(event,${seizingId},${borrowerId})">
+        <div class="form-grid" style="margin-bottom:16px">
+          <div class="form-group">
+            <label>Date <span class="req">*</span></label>
+            <input class="form-control" name="seizing_date" type="text" required maxlength="10"
+              placeholder="dd-mm-yy" inputmode="numeric"
+              oninput="validateDateInput(this)" value="${esc(fmtDate(p.seizing_date))}" />
+          </div>
+          <div class="form-group">
+            <label>Amount (₹) <span class="req">*</span></label>
+            <input class="form-control" name="amount" type="number" min="1" required value="${p.amount}" />
+          </div>
+          <div class="form-group form-full">
+            <label>Reason</label>
+            <input class="form-control" name="reason" value="${esc(p.reason || '')}" />
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button type="submit" class="btn btn-danger">Update Seizing Money</button>
+          <button type="button" class="btn btn-outline" onclick="showDetail(${borrowerId})">Cancel</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+async function submitEditSeizing(e, seizingId, borrowerId) {
+  e.preventDefault();
+  const data = {};
+  new FormData(e.target).forEach((v, k) => { data[k] = v; });
+  const iso = parseUserDate(data.seizing_date);
+  if (!iso) { toast('Date invalid. Use dd-mm-yy.', 'error'); return; }
+  data.seizing_date = iso;
+  const r = await api('update_seizing', seizingId, data);
+  if (r.success) { _viewDirty = true; toast('Seizing money updated!', 'success'); showDetail(borrowerId); }
+  else toast('Error: ' + r.error, 'error');
+}
+
 // ── Close / reopen loan ──────────────────────────────────────────
 async function confirmCloseLoan(borrowerId) {
   if (!confirm('Mark this loan as fully closed? This removes it from the overdue list.')) return;
@@ -1454,6 +1865,16 @@ async function renderPortfolio() {
       <div style="padding:20px 24px;display:flex;align-items:center;gap:24px">
         <div style="font-size:28px;font-weight:700;color:var(--warning)">${money(p.total_penalties)}</div>
         <div style="font-size:13px;color:var(--text-muted)">Total O/D penalty charges collected across all borrowers</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header">
+        <span class="card-title">Seizing Money Spent (O/D)</span>
+      </div>
+      <div style="padding:20px 24px;display:flex;align-items:center;gap:24px">
+        <div style="font-size:28px;font-weight:700;color:var(--warning)">${money(p.total_seizings || 0)}</div>
+        <div style="font-size:13px;color:var(--text-muted)">Total seizing money (towing / recovery / garage) across all borrowers</div>
       </div>
     </div>
 
