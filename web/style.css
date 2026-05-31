@@ -315,6 +315,44 @@ textarea.form-control { resize: vertical; min-height: 64px; }
   color: #1e40af !important;
   letter-spacing: 0.02em;
 }
+/* ── Payment mode chips (Add/Edit Payment forms) ─────────────── */
+.mode-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.mode-chip {
+  position: relative;
+  padding: 6px 14px;
+  border: 1.5px solid var(--border, #d1d5db);
+  border-radius: 999px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 500;
+  background: #fff;
+  transition: all 0.12s;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.mode-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.mode-chip:hover { border-color: var(--primary, #6366f1); }
+.mode-chip.checked {
+  background: var(--primary, #6366f1);
+  color: #fff;
+  border-color: var(--primary, #6366f1);
+}
+/* Compact inline pill — shown inside the Payments table */
+.mode-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+.mode-pill.mode-cash    { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+.mode-pill.mode-phonepe { background: #f3e8ff; color: #6b21a8; border-color: #e9d5ff; }
+.mode-pill.mode-scanner { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+
 .book-ref-tag {
   display: inline-flex;
   align-items: center;

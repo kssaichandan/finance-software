@@ -182,6 +182,7 @@ class API:
                 receipt_no=receipt,
                 installment_label=data.get("installment_label", ""),
                 notes=data.get("notes", ""),
+                payment_mode=data.get("payment_mode", ""),
             )
             return {"success": True, "id": pid}
         except Exception as e:
@@ -223,6 +224,7 @@ class API:
                     "receipt_no": receipt,
                     "installment_label": p.get("installment_label", ""),
                     "notes": p.get("notes", ""),
+                    "payment_mode": p.get("payment_mode", ""),
                 })
             ids = db.add_payments_many(bid, cleaned)
             return {"success": True, "ids": ids, "count": len(ids)}

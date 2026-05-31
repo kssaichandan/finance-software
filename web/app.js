@@ -159,6 +159,33 @@ function jsMonthsElapsed(fromStr, toStr) {
   return Math.max(0, months);
 }
 
+// Render 3 selectable radio chips for payment mode. `name` must be unique within
+// the form (use a per-block suffix in the multi-payment add form).
+const PAYMENT_MODES = [
+  { value: 'Cash',    icon: '💵', label: 'Cash' },
+  { value: 'PhonePe', icon: '📱', label: 'PhonePe' },
+  { value: 'Scanner', icon: '📷', label: 'Scanner' },
+];
+function modeIconFor(v) {
+  const m = PAYMENT_MODES.find(x => x.value === v);
+  return m ? m.icon : '';
+}
+// Compact pill for use inside the payments table — only shown if a mode is set.
+function modePill(v) {
+  if (!v) return '';   // no mode -> nothing rendered
+  const slug = v.toLowerCase();
+  return `<span class="mode-pill mode-${esc(slug)}">${modeIconFor(v)} ${esc(v)}</span>`;
+}
+function modeChips(name, current) {
+  const cur = current || '';   // empty -> no chip pre-selected
+  return `<div class="mode-chips">${PAYMENT_MODES.map(m => `
+    <label class="mode-chip ${m.value === cur ? 'checked' : ''}">
+      <input type="radio" name="${esc(name)}" value="${m.value}" ${m.value === cur ? 'checked' : ''}
+        onchange="this.closest('.mode-chips').querySelectorAll('.mode-chip').forEach(el => el.classList.remove('checked')); this.closest('.mode-chip').classList.add('checked');" />
+      <span>${m.icon} ${m.label}</span>
+    </label>`).join('')}</div>`;
+}
+
 // True if a borrower has a penalty situation — either PENALTY DUE (loan still
 // running past its period with money owed) or PAID LATE (cleared after the
 // loan period). Same logic as the badge shown in the borrower detail page.
@@ -726,6 +753,7 @@ function borrowerPdfCard(it, sl) {
           <td>${esc(p.receipt_no) || '—'}</td>
           <td>${esc(p.installment_label) || '—'}</td>
           <td class="amt">${money(p.amount)}</td>
+          <td>${p.payment_mode ? `${modeIconFor(p.payment_mode)} ${esc(p.payment_mode)}` : ''}</td>
           <td>${esc(p.notes) || ''}</td>
         </tr>`).join('')
     : '';
@@ -803,7 +831,7 @@ function borrowerPdfCard(it, sl) {
     ${pays.length > 0 ? `
       <div class="section-title">Payments (${pays.length})</div>
       <table class="mini">
-        <thead><tr><th>Date</th><th>Receipt</th><th>Inst #</th><th class="amt">Amount</th><th>Notes</th></tr></thead>
+        <thead><tr><th>Date</th><th>Receipt</th><th>Inst #</th><th class="amt">Amount</th><th>Mode</th><th>Notes</th></tr></thead>
         <tbody>${payRows}</tbody>
       </table>` : `<div class="empty">No payments recorded.</div>`}
 
@@ -1134,13 +1162,14 @@ async function showDetail(borrowerId) {
           <td>${esc(p.receipt_no) || '—'}</td>
           <td>${esc(p.installment_label) || '—'}</td>
           <td><strong>${money(p.amount)}</strong></td>
+          <td>${modePill(p.payment_mode)}</td>
           <td>${esc(p.notes) || '—'}</td>
           <td class="action-cell">
             <button class="btn btn-xs btn-outline" onclick="showEditPayment(${p.id},${b.id})">✏</button>
             <button class="btn btn-xs btn-danger-sm" onclick="deletePayment(${p.id},${b.id})">🗑</button>
           </td>
         </tr>`).join('')
-    : `<tr class="no-data"><td colspan="6">No payments recorded yet.</td></tr>`;
+    : `<tr class="no-data"><td colspan="7">No payments recorded yet.</td></tr>`;
 
   const penRows = penalties.length > 0
     ? penalties.map(p => `
@@ -1275,7 +1304,7 @@ async function showDetail(borrowerId) {
         <h4>Payments</h4>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th>Date</th><th>Receipt</th><th>Inst#</th><th>Amount</th><th>Notes</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Receipt</th><th>Inst#</th><th>Amount</th><th>Mode</th><th>Notes</th><th></th></tr></thead>
             <tbody>${payRows}</tbody>
           </table>
         </div>
@@ -1372,12 +1401,14 @@ function _readPaymentBlocks() {
   const out = [];
   document.querySelectorAll('#pay-blocks-wrap .pay-block').forEach(blk => {
     const get = sel => { const el = blk.querySelector(sel); return el ? el.value : ''; };
+    const modeRadio = blk.querySelector('input[type="radio"]:checked');
     out.push({
       payment_date: get('.pb-date'),
       receipt_no: get('.pb-receipt'),
       amount: get('.pb-amount'),
       installment_label: get('.pb-label'),
       notes: get('.pb-notes'),
+      payment_mode: modeRadio ? modeRadio.value : '',   // empty if user didn't pick
     });
   });
   return out;
@@ -1395,6 +1426,7 @@ function buildPaymentBlocks(count) {
     const a = prev ? prev.amount : '';
     const l = prev ? prev.installment_label : '';
     const n = prev ? prev.notes : '';
+    const mode = prev ? (prev.payment_mode || '') : '';   // new blocks start unselected
     html += `
       <div class="pay-block">
         <div class="pay-block-title">Payment ${i}</div>
@@ -1416,6 +1448,10 @@ function buildPaymentBlocks(count) {
           <div class="form-group">
             <label>Installment Label</label>
             <input class="form-control pb-label" placeholder="e.g. 1st, 2nd" value="${esc(l)}" />
+          </div>
+          <div class="form-group form-full">
+            <label>Payment Mode</label>
+            ${modeChips(`pay-mode-${i}`, mode)}
           </div>
           <div class="form-group form-full">
             <label>Notes</label>
@@ -1443,6 +1479,7 @@ async function submitPaymentBatch(e, borrowerId) {
       receipt_no: row.receipt_no,
       installment_label: row.installment_label,
       notes: row.notes,
+      payment_mode: row.payment_mode || '',
     });
   }
   const r = await api('add_payments_batch', borrowerId, payments);
@@ -1552,6 +1589,10 @@ async function showEditPayment(paymentId, borrowerId) {
             <input class="form-control" name="installment_label" value="${esc(p.installment_label || '')}" />
           </div>
           <div class="form-group form-full">
+            <label>Payment Mode</label>
+            ${modeChips('payment_mode', p.payment_mode || '')}
+          </div>
+          <div class="form-group form-full">
             <label>Notes</label>
             <input class="form-control" name="notes" value="${esc(p.notes || '')}" />
           </div>
@@ -1568,6 +1609,7 @@ async function submitEditPayment(e, paymentId, borrowerId) {
   e.preventDefault();
   const data = {};
   new FormData(e.target).forEach((v, k) => { data[k] = v; });
+  if (!data.payment_mode) data.payment_mode = '';   // allow clearing
   const iso = parseUserDate(data.payment_date);
   if (!iso) { toast('Payment Date invalid. Use dd-mm-yy.', 'error'); return; }
   data.payment_date = iso;

@@ -26,7 +26,7 @@ _BORROWER_COLS = frozenset({
     "loan_date", "notes", "closed",
 })
 _PAYMENT_COLS = frozenset({
-    "payment_date", "receipt_no", "amount", "installment_label", "notes",
+    "payment_date", "receipt_no", "amount", "installment_label", "notes", "payment_mode",
 })
 _PENALTY_COLS = frozenset({
     "charge_date", "receipt_no", "amount", "notes",
@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS payments (
     amount              REAL    NOT NULL,
     installment_label   TEXT,
     notes               TEXT,
+    payment_mode        TEXT    DEFAULT '',
     created_at          TEXT    DEFAULT (datetime('now'))
 );
 
@@ -127,6 +128,34 @@ def init_db() -> None:
         if "guarantor_phone2" not in cols:
             conn.execute("ALTER TABLE borrowers ADD COLUMN guarantor_phone2 TEXT DEFAULT ''")
 
+        # payments.payment_mode — added in v1.28. We deliberately do NOT
+        # backfill existing rows. Payments made before this feature existed
+        # were a mix of cash / PhonePe / scanner with no way to know which,
+        # so they stay blank and the UI shows nothing for them. Only new
+        # payments added in v1.28+ carry an explicit mode.
+        pay_cols = [r[1] for r in conn.execute("PRAGMA table_info(payments)").fetchall()]
+        if "payment_mode" not in pay_cols:
+            conn.execute("ALTER TABLE payments ADD COLUMN payment_mode TEXT DEFAULT ''")
+
+        # One-time data fix: an earlier (un-released) v1.28 build wrongly
+        # set every existing payment to 'Cash' on first run. Anyone whose DB
+        # was touched by that build still has 'Cash' on those rows. Reset
+        # them to blank, exactly once per DB (tracked via app_meta).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        fixed = conn.execute(
+            "SELECT 1 FROM app_meta WHERE key = 'payment_mode_clear_legacy_cash'"
+        ).fetchone()
+        if not fixed:
+            conn.execute(
+                "UPDATE payments SET payment_mode = '' WHERE payment_mode = 'Cash'"
+            )
+            conn.execute(
+                "INSERT INTO app_meta (key, value) VALUES "
+                "('payment_mode_clear_legacy_cash', '1')"
+            )
+
         # Partial unique indexes — non-empty book_ref must be unique across
         # borrowers, and non-empty receipt_no must be unique within payments.
         # Wrapped in try/except so existing duplicates in old data do not
@@ -150,11 +179,12 @@ def init_db() -> None:
 
 
 def book_ref_exists(book_ref: str, exclude_id: int | None = None) -> bool:
-    """True if any OTHER borrower already has this non-empty book_ref."""
+    """True if any OTHER borrower already has this non-empty book_ref.
+    Comparison is case-insensitive so 'B-101' and 'b-101' collide."""
     bref = (book_ref or "").strip()
     if not bref:
         return False
-    sql = "SELECT 1 FROM borrowers WHERE TRIM(book_ref) = ?"
+    sql = "SELECT 1 FROM borrowers WHERE LOWER(TRIM(book_ref)) = LOWER(?)"
     params: list = [bref]
     if exclude_id is not None:
         sql += " AND id != ?"
@@ -164,11 +194,12 @@ def book_ref_exists(book_ref: str, exclude_id: int | None = None) -> bool:
 
 
 def payment_receipt_exists(receipt_no: str, exclude_id: int | None = None) -> bool:
-    """True if any OTHER payment already has this non-empty receipt_no."""
+    """True if any OTHER payment already has this non-empty receipt_no.
+    Comparison is case-insensitive so 'ABC123' and 'abc123' collide."""
     r = (receipt_no or "").strip()
     if not r:
         return False
-    sql = "SELECT 1 FROM payments WHERE TRIM(receipt_no) = ?"
+    sql = "SELECT 1 FROM payments WHERE LOWER(TRIM(receipt_no)) = LOWER(?)"
     params: list = [r]
     if exclude_id is not None:
         sql += " AND id != ?"
@@ -217,13 +248,15 @@ def get_borrower(borrower_id: int) -> sqlite3.Row | None:
 
 def add_payment(borrower_id: int, payment_date: str, amount: float,
                 receipt_no: str = "", installment_label: str = "",
-                notes: str = "") -> int:
+                notes: str = "", payment_mode: str = "") -> int:
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO payments
-               (borrower_id, payment_date, receipt_no, amount, installment_label, notes)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (borrower_id, payment_date, receipt_no, amount, installment_label, notes),
+               (borrower_id, payment_date, receipt_no, amount,
+                installment_label, notes, payment_mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (borrower_id, payment_date, receipt_no, amount,
+             installment_label, notes, payment_mode or ""),
         )
         return cur.lastrowid
 
@@ -236,9 +269,11 @@ def add_payments_many(borrower_id: int, rows: list) -> list:
         for r in rows:
             cur = conn.execute(
                 "INSERT INTO payments (borrower_id, payment_date, receipt_no, "
-                "amount, installment_label, notes) VALUES (?, ?, ?, ?, ?, ?)",
+                "amount, installment_label, notes, payment_mode) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (borrower_id, r["payment_date"], r.get("receipt_no", ""),
-                 r["amount"], r.get("installment_label", ""), r.get("notes", "")),
+                 r["amount"], r.get("installment_label", ""), r.get("notes", ""),
+                 r.get("payment_mode") or ""),
             )
             ids.append(cur.lastrowid)
     return ids
