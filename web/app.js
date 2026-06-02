@@ -100,16 +100,44 @@ function loading(show) {
   document.getElementById('loader').classList.toggle('hidden', !show);
 }
 
-function toast(msg, type = 'info') {
+function toast(msg, type = 'info', action = null) {
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
   const icons = { success: '✓', error: '✕', info: 'ℹ' };
-  el.innerHTML = `<span>${icons[type]}</span><span>${esc(msg)}</span>`;
+  let actionHTML = '';
+  if (action && action.label && typeof action.onClick === 'function') {
+    actionHTML = `<button class="toast-action">${esc(action.label)}</button>`;
+  }
+  el.innerHTML = `<span>${icons[type]}</span><span class="toast-msg">${esc(msg)}</span>${actionHTML}`;
   document.getElementById('toasts').appendChild(el);
+  if (action && action.onClick) {
+    const btn = el.querySelector('.toast-action');
+    if (btn) btn.addEventListener('click', () => { action.onClick(); el.remove(); });
+  }
+  // Toasts with an action stay longer so the user has time to click.
+  const ttl = action ? 8000 : 3200;
   setTimeout(() => {
     el.style.animation = 'slide-out 0.2s ease forwards';
     setTimeout(() => el.remove(), 200);
-  }, 3200);
+  }, ttl);
+}
+
+// Show an API error toast. If the result has conflict_borrower_id, the toast
+// gets a "View →" button that closes any open modal and jumps to that borrower.
+function showApiError(result, fallback = 'unknown error') {
+  const msg = (result && result.error) || fallback;
+  if (result && result.conflict_borrower_id) {
+    toast(msg, 'error', {
+      label: 'View →',
+      onClick: () => {
+        try { closeModal(); } catch (_) {}
+        navigate('borrowers');
+        setTimeout(() => showDetail(result.conflict_borrower_id), 60);
+      },
+    });
+  } else {
+    toast('Error: ' + msg, 'error');
+  }
 }
 
 async function api(method, ...args) {
@@ -216,6 +244,141 @@ async function navigate(view) {
   else if (view === 'add') renderAddBorrower();
   else if (view === 'portfolio') await renderPortfolio();
   else if (view === 'help') renderHelp();
+  else if (view === 'settings') await renderSettings();
+}
+
+// ── Password protection (v1.29) ──────────────────────────────────
+// _hasPassword is the cached server state. We refresh it on app load and
+// after any Settings action so the delete flow knows whether to prompt.
+let _hasPassword = false;
+async function refreshHasPassword() {
+  try {
+    const r = await api('has_password');
+    _hasPassword = !!(r && r.has_password);
+  } catch (_) { _hasPassword = false; }
+  return _hasPassword;
+}
+
+// requirePasswordThen — show a password prompt before running `action`.
+// If no password is set, falls back to a normal confirm() with `confirmMsg`.
+// `description` is interpolated into the prompt: "This will delete <description>"
+function requirePasswordThen(description, confirmMsg, action) {
+  if (!_hasPassword) {
+    if (!confirm(confirmMsg)) return;
+    action();
+    return;
+  }
+  document.getElementById('modal-inner').innerHTML = `
+    <div class="mini-modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3>🔐 Confirm with Password</h3>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <p style="margin:0 0 14px;color:var(--text)">${esc(description)}</p>
+      <form id="pw-prompt-form">
+        <div class="form-group">
+          <label>Password <span class="req">*</span></label>
+          <input class="form-control" id="pw-prompt-input" type="password"
+            autocomplete="current-password" placeholder="Enter your delete password" />
+          <div class="form-hint" id="pw-prompt-error" style="color:var(--danger);margin-top:6px;display:none">Wrong password.</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button type="submit" class="btn btn-danger">Confirm Delete</button>
+          <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        </div>
+      </form>
+    </div>`;
+  openModal();
+  const input = document.getElementById('pw-prompt-input');
+  setTimeout(() => input && input.focus(), 50);
+  document.getElementById('pw-prompt-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pwd = input.value;
+    const r = await api('verify_password', pwd);
+    if (r && r.success) {
+      closeModal();
+      action();
+    } else {
+      const errEl = document.getElementById('pw-prompt-error');
+      if (errEl) errEl.style.display = '';
+      input.value = '';
+      input.focus();
+    }
+  });
+}
+
+async function renderSettings() {
+  await refreshHasPassword();
+  const setForm = `
+    <form id="set-password-form" class="card" style="padding:18px">
+      <h3 style="margin-top:0">${_hasPassword ? '🔐 Change Delete Password' : '🔐 Set Delete Password'}</h3>
+      ${_hasPassword
+        ? `<p style="color:var(--text-muted);margin:0 0 14px">A password is currently required before any delete. To change it, enter your current password and the new one.</p>`
+        : `<p style="color:var(--text-muted);margin:0 0 14px">Set a password to require confirmation before deleting any borrower, payment, penalty, or seizing entry.</p>`}
+      ${_hasPassword ? `
+        <div class="form-group">
+          <label>Current Password <span class="req">*</span></label>
+          <input class="form-control" name="current_password" type="password" autocomplete="current-password" required />
+        </div>` : ''}
+      <div class="form-group">
+        <label>New Password <span class="req">*</span> <span style="color:var(--text-muted);font-weight:400">(at least 4 characters)</span></label>
+        <input class="form-control" name="new_password" type="password" autocomplete="new-password" minlength="4" required />
+      </div>
+      <div class="form-group">
+        <label>Confirm New Password <span class="req">*</span></label>
+        <input class="form-control" name="confirm_password" type="password" autocomplete="new-password" minlength="4" required />
+      </div>
+      <button type="submit" class="btn btn-primary">${_hasPassword ? 'Update Password' : 'Set Password'}</button>
+    </form>`;
+
+  const resetCard = _hasPassword ? `
+    <div class="card" style="padding:18px;margin-top:18px;border-color:var(--danger)">
+      <h3 style="margin-top:0;color:var(--danger)">⚠ Forgot your password?</h3>
+      <p style="color:var(--text-muted);margin:0 0 14px">
+        This resets the delete password completely. Anyone with access to this PC can do it — it's a no-questions-asked escape hatch.
+        Your loan data is <strong>not</strong> affected, only the password.
+      </p>
+      <button class="btn btn-danger" onclick="resetPasswordFlow()">Reset Password (no recovery)</button>
+    </div>` : '';
+
+  document.getElementById('view').innerHTML = `
+    <div class="page-header">
+      <h2>⚙ Settings</h2>
+      <p style="color:var(--text-muted);margin:4px 0 0">Local app preferences and security.</p>
+    </div>
+    <div style="max-width:560px">
+      ${setForm}
+      ${resetCard}
+    </div>`;
+
+  document.getElementById('set-password-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const np = (fd.get('new_password') || '').toString();
+    const cp = (fd.get('confirm_password') || '').toString();
+    if (np !== cp) { toast('New password and confirmation do not match.', 'error'); return; }
+    const r = await api('set_password', np, fd.get('current_password') || '');
+    if (r && r.success) {
+      toast(_hasPassword ? 'Password updated.' : 'Password set — deletes are now protected.', 'success');
+      await refreshHasPassword();
+      renderSettings();
+    } else {
+      toast('Error: ' + (r && r.error || 'unknown'), 'error');
+    }
+  });
+}
+
+async function resetPasswordFlow() {
+  if (!confirm('Reset the delete password? Anyone using this PC can do this. Your loan data stays intact.')) return;
+  if (!confirm('Really reset? This is irreversible.')) return;
+  const r = await api('reset_password');
+  if (r && r.success) {
+    toast('Password removed. Deletes are no longer protected.', 'success');
+    await refreshHasPassword();
+    renderSettings();
+  } else {
+    toast('Error: ' + (r && r.error || 'unknown'), 'error');
+  }
 }
 
 function renderHelp() {
@@ -402,7 +565,7 @@ async function renderBorrowers() {
     </div>
     <div class="search-row">
       <input class="search-input" id="borrow-search" type="text"
-        placeholder="Search name, phone, vehicle, book ref…"
+        placeholder="Search name, phone, vehicle, book ref, receipt no…"
         value="${esc(searchQuery)}"
         oninput="filterBorrowers(this.value)" />
       <select class="filter-select" id="status-filter-select"
@@ -520,10 +683,16 @@ function passesBorrowerFilter(s, today, q) {
   }
   if (!q) return true;
   const lq = q.toLowerCase();
-  return (s.name || '').toLowerCase().includes(lq)
-    || (s.phone || '').toLowerCase().includes(lq)
-    || (s.vehicle_no || '').toLowerCase().includes(lq)
-    || (s.book_ref || '').toLowerCase().includes(lq);
+  if ((s.name || '').toLowerCase().includes(lq)) return true;
+  if ((s.phone || '').toLowerCase().includes(lq)) return true;
+  if ((s.vehicle_no || '').toLowerCase().includes(lq)) return true;
+  if ((s.book_ref || '').toLowerCase().includes(lq)) return true;
+  // Match any of this borrower's receipt numbers (case-insensitive).
+  const receipts = s.receipts || [];
+  for (let i = 0; i < receipts.length; i++) {
+    if ((receipts[i] || '').toLowerCase().includes(lq)) return true;
+  }
+  return false;
 }
 
 // Human-readable label for the active filter — used as the PDF heading.
@@ -1138,7 +1307,7 @@ async function submitBorrower(e, existingId) {
     toast(existingId ? 'Borrower updated.' : 'Loan created successfully!', 'success');
     navigate('borrowers');
   } else {
-    toast('Error: ' + result.error, 'error');
+    showApiError(result);
   }
 }
 
@@ -1488,7 +1657,7 @@ async function submitPaymentBatch(e, borrowerId) {
     toast(`${r.count} payment(s) saved!`, 'success');
     showDetail(borrowerId);
   } else {
-    toast('Error: ' + r.error, 'error');
+    showApiError(r);
   }
 }
 
@@ -1543,18 +1712,26 @@ async function submitPenalty(e, borrowerId) {
 }
 
 // ── Delete payment / penalty ─────────────────────────────────────
-async function deletePayment(paymentId, borrowerId) {
-  if (!confirm('Delete this payment? This cannot be undone.')) return;
-  const r = await api('delete_payment', paymentId);
-  if (r.success) { _viewDirty = true; toast('Payment deleted.', 'success'); showDetail(borrowerId); }
-  else toast('Error: ' + r.error, 'error');
+function deletePayment(paymentId, borrowerId) {
+  requirePasswordThen(
+    'This will delete this payment. It cannot be undone.',
+    'Delete this payment? This cannot be undone.',
+    async () => {
+      const r = await api('delete_payment', paymentId);
+      if (r.success) { _viewDirty = true; toast('Payment deleted.', 'success'); showDetail(borrowerId); }
+      else toast('Error: ' + r.error, 'error');
+    });
 }
 
-async function deletePenalty(penaltyId, borrowerId) {
-  if (!confirm('Delete this penalty? This cannot be undone.')) return;
-  const r = await api('delete_penalty', penaltyId);
-  if (r.success) { _viewDirty = true; toast('Penalty deleted.', 'success'); showDetail(borrowerId); }
-  else toast('Error: ' + r.error, 'error');
+function deletePenalty(penaltyId, borrowerId) {
+  requirePasswordThen(
+    'This will delete this penalty entry. It cannot be undone.',
+    'Delete this penalty? This cannot be undone.',
+    async () => {
+      const r = await api('delete_penalty', penaltyId);
+      if (r.success) { _viewDirty = true; toast('Penalty deleted.', 'success'); showDetail(borrowerId); }
+      else toast('Error: ' + r.error, 'error');
+    });
 }
 
 // ── Edit payment / penalty ───────────────────────────────────────
@@ -1615,7 +1792,7 @@ async function submitEditPayment(e, paymentId, borrowerId) {
   data.payment_date = iso;
   const r = await api('update_payment', paymentId, data);
   if (r.success) { _viewDirty = true; toast('Payment updated!', 'success'); showDetail(borrowerId); }
-  else toast('Error: ' + r.error, 'error');
+  else showApiError(r);
 }
 
 async function showEditPenalty(penaltyId, borrowerId) {
@@ -1716,11 +1893,15 @@ async function submitSeizing(e, borrowerId) {
   else toast('Error: ' + result.error, 'error');
 }
 
-async function deleteSeizing(seizingId, borrowerId) {
-  if (!confirm('Delete this seizing money entry? This cannot be undone.')) return;
-  const r = await api('delete_seizing', seizingId);
-  if (r.success) { _viewDirty = true; toast('Seizing entry deleted.', 'success'); showDetail(borrowerId); }
-  else toast('Error: ' + r.error, 'error');
+function deleteSeizing(seizingId, borrowerId) {
+  requirePasswordThen(
+    'This will delete this seizing money entry. It cannot be undone.',
+    'Delete this seizing money entry? This cannot be undone.',
+    async () => {
+      const r = await api('delete_seizing', seizingId);
+      if (r.success) { _viewDirty = true; toast('Seizing entry deleted.', 'success'); showDetail(borrowerId); }
+      else toast('Error: ' + r.error, 'error');
+    });
 }
 
 async function showEditSeizing(seizingId, borrowerId) {
@@ -1784,24 +1965,30 @@ async function reopenLoan(borrowerId) {
   else toast('Error: ' + r.error, 'error');
 }
 
-async function confirmDeleteBorrower(btn) {
+function confirmDeleteBorrower(btn) {
   const borrowerId = parseInt(btn.dataset.bid, 10);
   const name = btn.dataset.bname || 'this borrower';
-  const msg = `PERMANENTLY DELETE "${name}"?\n\n` +
-              `This will also delete ALL their payments and penalties.\n` +
-              `This CANNOT be undone.\n\n` +
-              `Click OK to delete, Cancel to keep.`;
-  if (!confirm(msg)) return;
-  // Second safety check
+  const longMsg = `PERMANENTLY DELETE "${name}"?\n\n` +
+                  `This will also delete ALL their payments, penalties, and seizing money entries.\n` +
+                  `This CANNOT be undone.\n\n` +
+                  `Click OK to delete, Cancel to keep.`;
+  // Always require the two-step confirm dialog (independent of the password
+  // gate) so the user is forced to read the consequences.
+  if (!confirm(longMsg)) return;
   if (!confirm(`Really delete "${name}"? Last chance — click OK to confirm.`)) return;
-  const r = await api('delete_borrower', borrowerId);
-  if (r.success) {
-    _viewDirty = true;
-    toast(`${name} deleted permanently.`, 'success');
-    closeModal();
-  } else {
-    toast('Error: ' + r.error, 'error');
-  }
+  requirePasswordThen(
+    `This will delete borrower "${name}" and ALL their payments / penalties / seizings. It cannot be undone.`,
+    `Final confirmation: delete "${name}" now?`,
+    async () => {
+      const r = await api('delete_borrower', borrowerId);
+      if (r.success) {
+        _viewDirty = true;
+        toast(`${name} deleted permanently.`, 'success');
+        closeModal();
+      } else {
+        toast('Error: ' + r.error, 'error');
+      }
+    });
 }
 
 // ── Edit borrower (from detail modal) ───────────────────────────
@@ -2004,7 +2191,10 @@ async function showPaymentSchedule(borrowerId) {
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', () => navigate('dashboard'));
+window.addEventListener('DOMContentLoaded', () => {
+  refreshHasPassword();   // load password state so delete prompts know whether to ask
+  navigate('dashboard');
+});
 
 // Prevent mouse-wheel from silently changing a focused number input.
 document.addEventListener('wheel', e => {

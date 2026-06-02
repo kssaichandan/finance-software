@@ -54,6 +54,7 @@ class LoanSummary:
     last_payment_date: str | None
     closed: bool
     book_ref: str
+    receipts: list
 
     @property
     def is_overdue(self) -> bool:
@@ -78,7 +79,8 @@ def compute_summary(borrower_row, today: date | None = None,
                     pay_sums: dict | None = None,
                     pen_sums: dict | None = None,
                     last_pays: dict | None = None,
-                    seiz_sums: dict | None = None) -> LoanSummary:
+                    seiz_sums: dict | None = None,
+                    receipts: dict | None = None) -> LoanSummary:
     """Compute a loan summary. If pay_sums/pen_sums/last_pays/seiz_sums dicts
     are passed, use them instead of per-borrower DB queries — used by
     all_summaries() to avoid an N+1 pattern across many borrowers."""
@@ -148,6 +150,7 @@ def compute_summary(borrower_row, today: date | None = None,
                            else db.last_payment_date(bid)),
         closed=closed,
         book_ref=b["book_ref"] or "",
+        receipts=(receipts.get(bid, []) if receipts is not None else []),
     )
 
 
@@ -167,7 +170,8 @@ def all_summaries(today: date | None = None) -> list[LoanSummary]:
     pen_sums = db.all_penalty_sums()
     last_pays = db.all_last_payment_dates()
     seiz_sums = db.all_seizing_sums()
-    return [compute_summary(r, today, pay_sums, pen_sums, last_pays, seiz_sums) for r in rows]
+    receipts = db.all_receipts_by_borrower()
+    return [compute_summary(r, today, pay_sums, pen_sums, last_pays, seiz_sums, receipts) for r in rows]
 
 
 def due_soon(days: int = 7, today: date | None = None) -> list[dict]:

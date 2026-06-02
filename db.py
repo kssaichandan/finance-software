@@ -178,34 +178,50 @@ def init_db() -> None:
             pass
 
 
-def book_ref_exists(book_ref: str, exclude_id: int | None = None) -> bool:
-    """True if any OTHER borrower already has this non-empty book_ref.
-    Comparison is case-insensitive so 'B-101' and 'b-101' collide."""
+def book_ref_conflict(book_ref: str, exclude_id: int | None = None) -> dict | None:
+    """Return {id, name, book_ref} of any OTHER borrower already using this
+    non-empty book_ref (case-insensitive). None if no conflict.
+    Replaces the old book_ref_exists() — callers now get the conflicting
+    borrower's name so the error message can point to it."""
     bref = (book_ref or "").strip()
     if not bref:
-        return False
-    sql = "SELECT 1 FROM borrowers WHERE LOWER(TRIM(book_ref)) = LOWER(?)"
+        return None
+    sql = ("SELECT id, name, book_ref FROM borrowers "
+           "WHERE LOWER(TRIM(book_ref)) = LOWER(?)")
     params: list = [bref]
     if exclude_id is not None:
         sql += " AND id != ?"
         params.append(exclude_id)
     with connect() as conn:
-        return conn.execute(sql, params).fetchone() is not None
+        row = conn.execute(sql, params).fetchone()
+        return {"id": row["id"], "name": row["name"], "book_ref": row["book_ref"]} if row else None
 
 
-def payment_receipt_exists(receipt_no: str, exclude_id: int | None = None) -> bool:
-    """True if any OTHER payment already has this non-empty receipt_no.
-    Comparison is case-insensitive so 'ABC123' and 'abc123' collide."""
+def payment_receipt_conflict(receipt_no: str, exclude_id: int | None = None) -> dict | None:
+    """Return details of any OTHER payment already using this non-empty
+    receipt_no (case-insensitive): {id, borrower_id, borrower_name, book_ref,
+    payment_date, amount, receipt_no}. None if no conflict."""
     r = (receipt_no or "").strip()
     if not r:
-        return False
-    sql = "SELECT 1 FROM payments WHERE LOWER(TRIM(receipt_no)) = LOWER(?)"
+        return None
+    sql = ("SELECT p.id, p.borrower_id, p.payment_date, p.amount, p.receipt_no, "
+           "       b.name AS borrower_name, b.book_ref AS book_ref "
+           "FROM payments p JOIN borrowers b ON b.id = p.borrower_id "
+           "WHERE LOWER(TRIM(p.receipt_no)) = LOWER(?)")
     params: list = [r]
     if exclude_id is not None:
-        sql += " AND id != ?"
+        sql += " AND p.id != ?"
         params.append(exclude_id)
     with connect() as conn:
-        return conn.execute(sql, params).fetchone() is not None
+        row = conn.execute(sql, params).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"], "borrower_id": row["borrower_id"],
+            "borrower_name": row["borrower_name"], "book_ref": row["book_ref"] or "",
+            "payment_date": row["payment_date"], "amount": float(row["amount"]),
+            "receipt_no": row["receipt_no"],
+        }
 
 
 def add_borrower(data: dict) -> int:
@@ -345,6 +361,23 @@ def all_penalty_sums() -> dict[int, float]:
         return {r["borrower_id"]: float(r["total"]) for r in rows}
 
 
+def all_receipts_by_borrower() -> dict[int, list[str]]:
+    """Return {borrower_id: [receipt_no, receipt_no, ...]} in one query.
+    Only non-empty receipts are included. Used by the Borrowers list so the
+    search box can match receipt numbers as well as name / phone / vehicle /
+    book ref. Even with hundreds of borrowers and thousands of payments,
+    the total payload stays trivially small (< 100 KB)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT borrower_id, receipt_no FROM payments "
+            "WHERE receipt_no IS NOT NULL AND TRIM(receipt_no) != ''"
+        ).fetchall()
+    out: dict[int, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["borrower_id"], []).append(r["receipt_no"])
+    return out
+
+
 def all_last_payment_dates() -> dict[int, str]:
     """Return {borrower_id: max(payment_date)} in one query."""
     with connect() as conn:
@@ -389,6 +422,81 @@ def delete_borrower(borrower_id: int) -> None:
     """Delete a borrower and all their payments/penalties/seizings (CASCADE via FK)."""
     with connect() as conn:
         conn.execute("DELETE FROM borrowers WHERE id = ?", (borrower_id,))
+
+
+# ── Password protection (v1.29) ──────────────────────────────────────
+# A simple delete-action guard. Stores PBKDF2-HMAC-SHA256 of the password
+# in the existing app_meta table. Hash and salt are kept hex-encoded so
+# they read cleanly in DB Browser. Python stdlib only.
+import hashlib
+import os as _os
+import secrets as _secrets
+
+_PBKDF2_ITERS = 120_000
+_PBKDF2_SALT_BYTES = 16
+
+
+def _meta_get(conn, key: str) -> str | None:
+    conn.execute("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)")
+    row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _meta_set(conn, key: str, value: str) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def _meta_delete(conn, key: str) -> None:
+    conn.execute("DELETE FROM app_meta WHERE key = ?", (key,))
+
+
+def has_password() -> bool:
+    with connect() as conn:
+        return _meta_get(conn, "password_hash") is not None
+
+
+def _hash_password(password: str, salt: bytes) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, _PBKDF2_ITERS
+    ).hex()
+
+
+def verify_password(password: str) -> bool:
+    """Constant-time compare. Returns False if no password is set."""
+    with connect() as conn:
+        salt_hex = _meta_get(conn, "password_salt")
+        hash_hex = _meta_get(conn, "password_hash")
+    if not salt_hex or not hash_hex:
+        return False
+    try:
+        salt = bytes.fromhex(salt_hex)
+    except ValueError:
+        return False
+    candidate = _hash_password(password or "", salt)
+    return _secrets.compare_digest(candidate, hash_hex)
+
+
+def set_password(new_password: str) -> None:
+    """Set/replace the delete password. No length minimum is enforced at this
+    layer — the API layer handles validation and prompts for current password
+    on change."""
+    salt = _os.urandom(_PBKDF2_SALT_BYTES)
+    h = _hash_password(new_password, salt)
+    with connect() as conn:
+        _meta_set(conn, "password_salt", salt.hex())
+        _meta_set(conn, "password_hash", h)
+
+
+def reset_password() -> None:
+    """Wipe the password rows. Used by the in-app Reset Password button."""
+    with connect() as conn:
+        _meta_delete(conn, "password_salt")
+        _meta_delete(conn, "password_hash")
 
 
 def add_seizing(borrower_id: int, seizing_date: str, amount: float,

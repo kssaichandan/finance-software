@@ -14,6 +14,20 @@ def _row(r) -> dict | None:
     return {k: r[k] for k in r.keys()}
 
 
+def _receipt_conflict_msg(typed_receipt: str, conflict: dict) -> str:
+    """Format a helpful duplicate-receipt error pointing at the existing
+    payment's borrower / amount / date so the user knows which record to check."""
+    from datetime import datetime as _dt
+    try:
+        pd = _dt.strptime(conflict["payment_date"], "%Y-%m-%d").strftime("%d-%m-%y")
+    except Exception:
+        pd = conflict["payment_date"]
+    name = conflict["borrower_name"] or "(unknown)"
+    book = f" book {conflict['book_ref']}" if conflict.get("book_ref") else ""
+    return (f"Receipt No '{typed_receipt}' is already used in a payment for "
+            f"{name}{book} (₹{int(round(conflict['amount']))} on {pd}).")
+
+
 def _summary(s: models.LoanSummary) -> dict:
     return {
         "borrower_id": s.borrower_id,
@@ -41,6 +55,7 @@ def _summary(s: models.LoanSummary) -> dict:
         "is_overdue": s.is_overdue,
         "is_advance": s.is_advance,
         "book_ref": s.book_ref,
+        "receipts": s.receipts,
     }
 
 
@@ -112,9 +127,12 @@ class API:
             data["period_months"] = int(data["period_months"])
             data["installment_amount"] = float(data["installment_amount"])
             bref = (data.get("book_ref") or "").strip()
-            if bref and db.book_ref_exists(bref):
-                return {"success": False,
-                        "error": f"Book No / S.No '{bref}' is already used by another borrower."}
+            if bref:
+                conflict = db.book_ref_conflict(bref)
+                if conflict:
+                    return {"success": False, "conflict_borrower_id": conflict["id"],
+                            "error": (f"Book No / S.No '{bref}' is already used by "
+                                      f"{conflict['name']} (book {conflict['book_ref']}).")}
             bid = db.add_borrower(data)
             return {"success": True, "id": bid}
         except Exception as e:
@@ -127,9 +145,12 @@ class API:
             data["period_months"] = int(data["period_months"])
             data["installment_amount"] = float(data["installment_amount"])
             bref = (data.get("book_ref") or "").strip()
-            if bref and db.book_ref_exists(bref, exclude_id=int(borrower_id)):
-                return {"success": False,
-                        "error": f"Book No / S.No '{bref}' is already used by another borrower."}
+            if bref:
+                conflict = db.book_ref_conflict(bref, exclude_id=int(borrower_id))
+                if conflict:
+                    return {"success": False, "conflict_borrower_id": conflict["id"],
+                            "error": (f"Book No / S.No '{bref}' is already used by "
+                                      f"{conflict['name']} (book {conflict['book_ref']}).")}
             db.update_borrower(borrower_id, data)
             return {"success": True}
         except Exception as e:
@@ -172,9 +193,13 @@ class API:
     def add_payment(self, data: dict) -> dict:
         try:
             receipt = (data.get("receipt_no") or "").strip()
-            if receipt and db.payment_receipt_exists(receipt):
-                return {"success": False,
-                        "error": f"Receipt No '{receipt}' is already used in another payment."}
+            if receipt:
+                conflict = db.payment_receipt_conflict(receipt)
+                if conflict:
+                    return {"success": False,
+                            "conflict_borrower_id": conflict["borrower_id"],
+                            "conflict_payment_id": conflict["id"],
+                            "error": _receipt_conflict_msg(receipt, conflict)}
             pid = db.add_payment(
                 borrower_id=int(data["borrower_id"]),
                 payment_date=data["payment_date"],
@@ -213,10 +238,13 @@ class API:
                         return {"success": False,
                                 "error": f"Payment {idx}: Receipt No '{receipt}' "
                                          f"is repeated within this batch."}
-                    if db.payment_receipt_exists(receipt):
+                    conflict = db.payment_receipt_conflict(receipt)
+                    if conflict:
                         return {"success": False,
-                                "error": f"Payment {idx}: Receipt No '{receipt}' "
-                                         f"is already used in another payment."}
+                                "conflict_borrower_id": conflict["borrower_id"],
+                                "conflict_payment_id": conflict["id"],
+                                "error": f"Payment {idx}: " +
+                                         _receipt_conflict_msg(receipt, conflict)}
                     seen.add(low)
                 cleaned.append({
                     "payment_date": p["payment_date"],
@@ -255,9 +283,13 @@ class API:
         try:
             data["amount"] = float(data["amount"])
             receipt = (data.get("receipt_no") or "").strip()
-            if receipt and db.payment_receipt_exists(receipt, exclude_id=int(payment_id)):
-                return {"success": False,
-                        "error": f"Receipt No '{receipt}' is already used in another payment."}
+            if receipt:
+                conflict = db.payment_receipt_conflict(receipt, exclude_id=int(payment_id))
+                if conflict:
+                    return {"success": False,
+                            "conflict_borrower_id": conflict["borrower_id"],
+                            "conflict_payment_id": conflict["id"],
+                            "error": _receipt_conflict_msg(receipt, conflict)}
             data["receipt_no"] = receipt
             db.update_payment(int(payment_id), data)
             return {"success": True}
@@ -304,6 +336,39 @@ class API:
         try:
             data["amount"] = float(data["amount"])
             db.update_seizing(int(seizing_id), data)
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ---- Password protection for deletes (v1.29) -------------------------
+
+    def has_password(self) -> dict:
+        return {"has_password": db.has_password()}
+
+    def verify_password(self, password: str) -> dict:
+        return {"success": db.verify_password(password or "")}
+
+    def set_password(self, new_password: str, current_password: str = "") -> dict:
+        """Initial set OR change. If a password already exists, current_password
+        must match. New password must be at least 4 characters."""
+        try:
+            new_password = (new_password or "").strip()
+            if len(new_password) < 4:
+                return {"success": False,
+                        "error": "Password must be at least 4 characters."}
+            if db.has_password():
+                if not db.verify_password(current_password or ""):
+                    return {"success": False,
+                            "error": "Current password is wrong."}
+            db.set_password(new_password)
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def reset_password(self) -> dict:
+        """Remove the password entirely. The 'forgot password' escape hatch."""
+        try:
+            db.reset_password()
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}

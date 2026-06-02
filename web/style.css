@@ -244,7 +244,10 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 
 /* ── Toast ────────────────────────────────────────────────────── */
 #toasts { position: fixed; bottom: 24px; right: 24px; z-index: 500; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
-.toast { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 10px; font-size: 13.5px; font-weight: 500; box-shadow: var(--shadow-lg); pointer-events: auto; animation: slide-in 0.2s ease; min-width: 260px; }
+.toast { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 10px; font-size: 13.5px; font-weight: 500; box-shadow: var(--shadow-lg); pointer-events: auto; animation: slide-in 0.2s ease; min-width: 260px; max-width: 520px; }
+.toast-msg { flex: 1; line-height: 1.35; }
+.toast-action { font: inherit; padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,0.22); color: #fff; border: 1px solid rgba(255,255,255,0.4); cursor: pointer; white-space: nowrap; font-weight: 600; }
+.toast-action:hover { background: rgba(255,255,255,0.35); }
 .toast-success { background: #166534; color: white; }
 .toast-error { background: #991b1b; color: white; }
 .toast-info { background: #1e40af; color: white; }
