@@ -2,7 +2,8 @@
 
 // ── State ────────────────────────────────────────────────────────
 let currentView = 'dashboard';
-let searchQuery = '';
+let searchQuery = '';      // matches name / phone / vehicle / book ref
+let receiptQuery = '';     // matches receipt numbers (separate input in toolbar)
 let showClosed = false;
 let statusFilter = 'everything';
 let pickDate = '';
@@ -565,9 +566,13 @@ async function renderBorrowers() {
     </div>
     <div class="search-row">
       <input class="search-input" id="borrow-search" type="text"
-        placeholder="Search name, phone, vehicle, book ref, receipt no…"
+        placeholder="Search name / phone / vehicle / book ref…"
         value="${esc(searchQuery)}"
         oninput="filterBorrowers(this.value)" />
+      <input class="search-input search-input-receipt" id="receipt-search" type="text"
+        placeholder="🧾 Search receipt no…"
+        value="${esc(receiptQuery)}"
+        oninput="setReceiptQuery(this.value)" />
       <select class="filter-select" id="status-filter-select"
         onchange="setStatusFilter(this.value)">
         <option value="everything" ${statusFilter==='everything'  ?'selected':''}>All Borrowers (Active + Closed)</option>
@@ -616,6 +621,7 @@ async function renderBorrowers() {
         📄 Export to PDF
       </button>
     </div>
+    <div id="receipt-match-slot"></div>
     <div class="card">
       <div class="table-wrap table-scroll-full">
         <table class="data-table">
@@ -633,6 +639,55 @@ async function renderBorrowers() {
 
   window._allSummaries = summaries;
   filterBorrowers(searchQuery);
+}
+
+function setReceiptQuery(v) {
+  receiptQuery = v;
+  filterBorrowers(searchQuery);   // re-runs the filter + re-renders the match card
+}
+
+// Render the small card above the Borrowers table when the receipt search
+// box has a value: shows the matched payment's full details, or "no match".
+function renderReceiptMatchCard() {
+  const slot = document.getElementById('receipt-match-slot');
+  if (!slot) return;
+  const q = (receiptQuery || '').trim();
+  if (!q) { slot.innerHTML = ''; return; }
+  const matches = findReceiptMatches();
+  if (matches.length === 0) {
+    slot.innerHTML = `
+      <div class="receipt-match-card empty">
+        <div class="rmc-icon">🔍</div>
+        <div>No payment found with receipt <strong>${esc(q)}</strong>.</div>
+      </div>`;
+    return;
+  }
+  const head = matches.length === 1
+    ? `<div class="rmc-header">🧾 Match found for <strong>${esc(q)}</strong></div>`
+    : `<div class="rmc-header">🧾 ${matches.length} matches for <strong>${esc(q)}</strong></div>`;
+  const rows = matches.map(m => {
+    const p = m.payment;
+    const modeBit = p.payment_mode ? modePill(p.payment_mode) : '';
+    const notesBit = p.notes ? `<div class="rmc-notes">📝 ${esc(p.notes)}</div>` : '';
+    return `
+      <div class="rmc-row">
+        <div class="rmc-main">
+          <div class="rmc-line1">
+            <span class="rmc-receipt">${esc(p.receipt_no)}</span>
+            <span class="rmc-amount">${money(p.amount)}</span>
+            <span class="rmc-date">${fmtDate(p.payment_date)}</span>
+            ${modeBit}
+          </div>
+          <div class="rmc-line2">
+            <strong>${esc(m.borrower_name) || '—'}</strong>
+            ${m.book_ref ? `<span class="book-ref-tag">${esc(m.book_ref)}</span>` : ''}
+          </div>
+          ${notesBit}
+        </div>
+        <button class="btn btn-sm btn-outline" onclick="showDetail(${m.borrower_id})">View →</button>
+      </div>`;
+  }).join('');
+  slot.innerHTML = `<div class="receipt-match-card">${head}${rows}</div>`;
 }
 
 // Pure predicate — true if a summary should be shown given current filter+search.
@@ -681,18 +736,48 @@ function passesBorrowerFilter(s, today, q) {
     if (statusFilter === 'due_7days'    && (daysUntil < 0 || daysUntil > 7)) return false;
     if (statusFilter === 'pick_date'    && pickDate && nd !== pickDate) return false;
   }
-  if (!q) return true;
-  const lq = q.toLowerCase();
-  if ((s.name || '').toLowerCase().includes(lq)) return true;
-  if ((s.phone || '').toLowerCase().includes(lq)) return true;
-  if ((s.vehicle_no || '').toLowerCase().includes(lq)) return true;
-  if ((s.book_ref || '').toLowerCase().includes(lq)) return true;
-  // Match any of this borrower's receipt numbers (case-insensitive).
-  const receipts = s.receipts || [];
-  for (let i = 0; i < receipts.length; i++) {
-    if ((receipts[i] || '').toLowerCase().includes(lq)) return true;
+  // Normal search box: name / phone / vehicle / book ref
+  if (q) {
+    const lq = q.toLowerCase();
+    const matched =
+         (s.name || '').toLowerCase().includes(lq)
+      || (s.phone || '').toLowerCase().includes(lq)
+      || (s.vehicle_no || '').toLowerCase().includes(lq)
+      || (s.book_ref || '').toLowerCase().includes(lq);
+    if (!matched) return false;
   }
-  return false;
+  // Dedicated receipt search box: check this borrower's receipts
+  if (receiptQuery) {
+    const lr = receiptQuery.toLowerCase();
+    const receipts = s.receipts || [];
+    const hit = receipts.some(p =>
+      ((p && (p.receipt_no || p)) || '').toString().toLowerCase().includes(lr));
+    if (!hit) return false;
+  }
+  return true;
+}
+
+// Find every payment whose receipt matches the current receipt query, across
+// all loaded summaries. Used to render the small "matched receipt" card above
+// the Borrowers table.
+function findReceiptMatches() {
+  const lr = (receiptQuery || '').trim().toLowerCase();
+  if (!lr) return [];
+  const out = [];
+  for (const s of (window._allSummaries || [])) {
+    for (const p of (s.receipts || [])) {
+      const rno = (p && (p.receipt_no || p)) || '';
+      if (rno.toString().toLowerCase().includes(lr)) {
+        out.push({
+          payment: typeof p === 'object' ? p : { receipt_no: rno },
+          borrower_id: s.borrower_id,
+          borrower_name: s.name,
+          book_ref: s.book_ref,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 // Human-readable label for the active filter — used as the PDF heading.
@@ -725,6 +810,7 @@ function currentFilterLabel() {
 
 function filterBorrowers(q) {
   searchQuery = q;
+  renderReceiptMatchCard();   // update the inline card whenever search changes
   const summaries = window._allSummaries || [];
   const tbody = document.getElementById('borrow-tbody');
   if (!tbody) return;

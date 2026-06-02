@@ -361,20 +361,29 @@ def all_penalty_sums() -> dict[int, float]:
         return {r["borrower_id"]: float(r["total"]) for r in rows}
 
 
-def all_receipts_by_borrower() -> dict[int, list[str]]:
-    """Return {borrower_id: [receipt_no, receipt_no, ...]} in one query.
-    Only non-empty receipts are included. Used by the Borrowers list so the
-    search box can match receipt numbers as well as name / phone / vehicle /
-    book ref. Even with hundreds of borrowers and thousands of payments,
-    the total payload stays trivially small (< 100 KB)."""
+def all_receipts_by_borrower() -> dict[int, list[dict]]:
+    """Return {borrower_id: [{payment_id, receipt_no, payment_date, amount,
+    payment_mode, notes}, ...]} in one query. Only non-empty receipts are
+    included. Used by the Borrowers page so the receipt search box can both
+    filter the table AND show payment details for the match — no extra API
+    round-trip needed. Even with thousands of payments the payload stays small
+    (~100 bytes per row)."""
     with connect() as conn:
         rows = conn.execute(
-            "SELECT borrower_id, receipt_no FROM payments "
+            "SELECT id, borrower_id, payment_date, amount, receipt_no, "
+            "       payment_mode, notes FROM payments "
             "WHERE receipt_no IS NOT NULL AND TRIM(receipt_no) != ''"
         ).fetchall()
-    out: dict[int, list[str]] = {}
+    out: dict[int, list[dict]] = {}
     for r in rows:
-        out.setdefault(r["borrower_id"], []).append(r["receipt_no"])
+        out.setdefault(r["borrower_id"], []).append({
+            "payment_id": r["id"],
+            "receipt_no": r["receipt_no"],
+            "payment_date": r["payment_date"],
+            "amount": float(r["amount"]),
+            "payment_mode": r["payment_mode"] or "",
+            "notes": r["notes"] or "",
+        })
     return out
 
 
