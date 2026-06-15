@@ -430,7 +430,11 @@ async function refreshHasPassword() {
 // Calls action(password) once the user confirms. The password is forwarded to
 // the server so the delete is enforced there too (the server independently
 // re-checks it — the browser gate alone is not trusted).
-function requirePasswordThen(description, confirmMsg, action) {
+function requirePasswordThen(description, confirmMsg, action, opts) {
+  opts = opts || {};
+  const title = opts.title || '🔐 Confirm with Password';
+  const btnLabel = opts.btnLabel || 'Confirm Delete';
+  const btnClass = opts.btnClass || 'btn-danger';
   if (!_hasPassword) {
     if (!confirm(confirmMsg)) return;
     action('');
@@ -439,7 +443,7 @@ function requirePasswordThen(description, confirmMsg, action) {
   document.getElementById('modal-inner').innerHTML = `
     <div class="mini-modal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h3>🔐 Confirm with Password</h3>
+        <h3>${title}</h3>
         <button class="modal-close" onclick="closeModal()">✕</button>
       </div>
       <p style="margin:0 0 14px;color:var(--text)">${esc(description)}</p>
@@ -447,11 +451,11 @@ function requirePasswordThen(description, confirmMsg, action) {
         <div class="form-group">
           <label>Password <span class="req">*</span></label>
           <input class="form-control" id="pw-prompt-input" type="password"
-            autocomplete="current-password" placeholder="Enter your delete password" />
+            autocomplete="current-password" placeholder="Enter your password" />
           <div class="form-hint" id="pw-prompt-error" style="color:var(--danger);margin-top:6px;display:none">Wrong password.</div>
         </div>
         <div style="display:flex;gap:10px">
-          <button type="submit" class="btn btn-danger">Confirm Delete</button>
+          <button type="submit" class="btn ${btnClass}">${btnLabel}</button>
           <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
         </div>
       </form>
@@ -477,8 +481,12 @@ function requirePasswordThen(description, confirmMsg, action) {
 
 async function renderSettings() {
   await refreshHasPassword();
-  let s = { business_name: '', text_size: 'normal' };
+  let s = { business_name: '', text_size: 'normal', autobackup_enabled: false, autobackup_dir: '' };
   try { s = await api('get_settings'); } catch (_) {}
+  let detected = { folders: [] };
+  try { detected = await api('detect_sync_folders'); } catch (_) {}
+  let abStatus = {};
+  try { abStatus = await api('autobackup_status'); } catch (_) {}
 
   const appCard = `
     <div class="card" style="padding:18px;margin-bottom:18px">
@@ -506,6 +514,43 @@ async function renderSettings() {
       <p style="color:var(--text-muted);margin:0 0 14px">Save a complete copy of all your data to your <b>Downloads</b> folder, then copy it to a USB drive or Google Drive / OneDrive. Do this regularly.</p>
       <button type="button" class="btn btn-primary" onclick="doBackup()">💾 Back up now</button>
       <p style="color:var(--text-muted);font-size:12.5px;margin:12px 0 0">To restore on another PC: close the app, copy your backup file into the app's folder and rename it to <code>finance.db</code>, then start the app.</p>
+    </div>`;
+
+  const folderBtns = (detected.folders || []).map(f => {
+    const target = f.path + '\\FinanceTracker Backups';
+    return `<button type="button" class="btn btn-sm btn-outline" data-path="${esc(target)}" onclick="pickAutobackupFolder(this)">📁 ${esc(f.label)}</button>`;
+  }).join('') || '<span style="color:var(--text-muted);font-size:12.5px">No OneDrive / Google Drive folder detected — paste a folder path below.</span>';
+
+  const statusLine = (abStatus && abStatus.when)
+    ? (abStatus.ok
+        ? `<div class="ab-status ok">✓ Last auto-backup: ${esc(abStatus.when)}</div>`
+        : `<div class="ab-status err">⚠ Last auto-backup failed: ${esc(abStatus.error || 'unknown')}</div>`)
+    : '';
+
+  const autoBackupCard = `
+    <div class="card" style="padding:18px;margin-bottom:18px">
+      <h3 style="margin-top:0">🔄 Auto-backup to cloud</h3>
+      <p style="color:var(--text-muted);margin:0 0 14px">
+        After every change, a safe copy is written into a folder you choose. Point it at your
+        <b>OneDrive</b> or <b>Google Drive</b> folder and it uploads to the cloud automatically —
+        no manual copying. A dated copy is also kept each day so you can roll back.
+      </p>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer;font-size:14px;font-weight:500">
+        <input type="checkbox" id="ab-enabled" ${s.autobackup_enabled ? 'checked' : ''} style="width:17px;height:17px;accent-color:var(--primary)" />
+        <span>Turn on automatic backup (after every change)</span>
+      </label>
+      <div class="form-group" style="margin-bottom:10px">
+        <label>Backup folder</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${folderBtns}</div>
+        <input class="form-control" id="ab-dir" value="${esc(s.autobackup_dir || '')}"
+          placeholder="e.g. C:\\Users\\you\\OneDrive\\FinanceTracker Backups" />
+        <span class="form-hint">Tip: choose a folder inside OneDrive / Google Drive so it syncs to the cloud.</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button type="button" class="btn btn-primary" onclick="saveAutobackup()">Save</button>
+        <button type="button" class="btn btn-outline" onclick="runAutobackupNow()">Back up now</button>
+      </div>
+      ${statusLine}
     </div>`;
 
   const setForm = `
@@ -548,6 +593,7 @@ async function renderSettings() {
     <div style="max-width:560px">
       ${appCard}
       ${backupCard}
+      ${autoBackupCard}
       ${setForm}
       ${resetCard}
     </div>`;
@@ -621,6 +667,59 @@ async function doBackup() {
   finally { loading(false); }
   if (r && r.success) toast('Backup saved → ' + r.path, 'success');
   else toast('Backup failed: ' + (r && r.error || 'unknown'), 'error');
+}
+
+// ── Auto-backup to a cloud-synced folder ─────────────────────────
+function pickAutobackupFolder(btn) {
+  const dir = document.getElementById('ab-dir');
+  if (dir) dir.value = btn.dataset.path;
+}
+
+async function saveAutobackup() {
+  const on = !!(document.getElementById('ab-enabled') || {}).checked;
+  const dirEl = document.getElementById('ab-dir');
+  const folder = ((dirEl && dirEl.value) || '').trim();
+  if (on && !folder) { toast('Please choose or paste a backup folder first.', 'error'); return; }
+
+  const apply = async () => {
+    await api('set_setting', 'autobackup_dir', folder);
+    await api('set_setting', 'autobackup_enabled', on ? '1' : '0');
+    if (on) {
+      loading(true);
+      let r;
+      try { r = await api('run_autobackup_now'); } finally { loading(false); }
+      if (r && r.success) toast('Auto-backup on. First backup saved → ' + r.path, 'success');
+      else toast('Saved, but the test backup failed: ' + (r && r.error || 'unknown') + '. Check the folder path.', 'error');
+    } else {
+      toast('Auto-backup turned off.', 'success');
+    }
+    renderSettings();
+  };
+
+  // Changing the auto-backup setting requires the password (if one is set).
+  if (_hasPassword) {
+    requirePasswordThen(
+      'Enter your password to change automatic backup settings.',
+      '',
+      () => apply(),
+      { title: '🔐 Confirm with Password', btnLabel: 'Confirm', btnClass: 'btn-primary' }
+    );
+  } else {
+    apply();
+  }
+}
+
+async function runAutobackupNow() {
+  const dirEl = document.getElementById('ab-dir');
+  const folder = ((dirEl && dirEl.value) || '').trim();
+  if (!folder) { toast('Choose or paste a backup folder first.', 'error'); return; }
+  // Manual one-off backup — does NOT change the saved (password-protected) folder.
+  loading(true);
+  let r;
+  try { r = await api('backup_to_folder', folder); } finally { loading(false); }
+  if (r && r.success) toast('Backup saved → ' + r.path, 'success');
+  else toast('Backup failed: ' + (r && r.error || 'unknown'), 'error');
+  renderSettings();
 }
 
 // Load persisted settings once at startup (text size + business name).
@@ -2361,6 +2460,12 @@ async function showAddPayment(borrowerId) {
         <h3>Add Payment</h3>
         <button class="modal-close" onclick="showDetail(${borrowerId})">✕</button>
       </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+        <label style="font-size:13px;font-weight:600;color:var(--text);margin:0">How many payments to add?</label>
+        <input type="number" id="pay-count" class="form-control" min="1" max="${MAX_PAYMENTS_AT_ONCE}" value="1"
+          style="width:84px" oninput="setPaymentCount(this.value)" />
+        <span style="font-size:12.5px;color:var(--text-muted)">type a number (max ${MAX_PAYMENTS_AT_ONCE})</span>
+      </div>
       <form onsubmit="submitPaymentBatch(event, ${borrowerId})">
         <div class="pay-blocks-wrap" id="pay-blocks-wrap"></div>
         <button type="button" class="btn btn-outline btn-sm" style="margin-top:4px"
@@ -2374,6 +2479,14 @@ async function showAddPayment(borrowerId) {
     </div>`;
   buildPaymentBlocks(1);
   openModal();
+}
+
+// Build exactly N payment blocks from the "How many payments?" box.
+function setPaymentCount(v) {
+  let n = parseInt(v, 10) || 1;
+  if (n < 1) n = 1;
+  if (n > MAX_PAYMENTS_AT_ONCE) n = MAX_PAYMENTS_AT_ONCE;
+  buildPaymentBlocks(n);
 }
 
 // Append one more payment block (up to the safety cap), keeping typed values.
@@ -2470,6 +2583,8 @@ function buildPaymentBlocks(count, preset) {
       </div>`;
   }
   document.getElementById('pay-blocks-wrap').innerHTML = html;
+  const cnt = document.getElementById('pay-count');   // keep the count box in sync
+  if (cnt && String(count) !== cnt.value) cnt.value = count;
 }
 
 async function submitPaymentBatch(e, borrowerId) {

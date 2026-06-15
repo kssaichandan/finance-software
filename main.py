@@ -16,8 +16,20 @@ import traceback
 import webbrowser
 import subprocess
 import shutil
+import autobackup
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+
+
+# API methods that change data — after any of these succeeds we schedule an
+# auto-backup (if the user enabled it).
+MUTATING_METHODS = frozenset({
+    "add_borrower", "update_borrower", "delete_borrower",
+    "add_payment", "add_payments_batch", "update_payment", "delete_payment",
+    "add_penalty", "update_penalty", "delete_penalty",
+    "add_seizing", "update_seizing", "delete_seizing",
+    "close_loan", "reopen_loan",
+})
 
 
 # Updated by every request and every heartbeat. If no activity for
@@ -165,6 +177,12 @@ def build_handler(api):
                 if not isinstance(args, list):
                     args = [args]
                 result = method(*args)
+                if (method_name in MUTATING_METHODS and isinstance(result, dict)
+                        and result.get("success")):
+                    try:
+                        autobackup.mark_dirty()
+                    except Exception:
+                        pass
                 try:
                     body = json.dumps(result, default=str, allow_nan=False)
                 except ValueError:
@@ -226,6 +244,9 @@ def main():
             pass
         sys.exit(1)
     api = API()
+
+    # Background auto-backup worker (no-op unless the user enables it in Settings).
+    threading.Thread(target=autobackup.run_worker, daemon=True).start()
 
     port = _free_port()
     server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(api))

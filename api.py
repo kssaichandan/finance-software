@@ -9,6 +9,7 @@ from pathlib import Path
 
 import db
 import models
+import autobackup
 
 
 # ── Shared input validation ──────────────────────────────────────────
@@ -565,17 +566,61 @@ class API:
         return {
             "business_name": db.get_setting("business_name", ""),
             "text_size": db.get_setting("text_size", "normal"),
+            "autobackup_enabled": db.get_setting("autobackup_enabled", "0") == "1",
+            "autobackup_dir": db.get_setting("autobackup_dir", ""),
         }
 
     def set_setting(self, key: str, value: str) -> dict:
-        allowed = {"business_name", "text_size"}
+        allowed = {"business_name", "text_size", "autobackup_enabled", "autobackup_dir"}
         if key not in allowed:
             return {"success": False, "error": "Unknown setting."}
         try:
-            db.set_setting(key, (value or "")[:80])
+            maxlen = 400 if key == "autobackup_dir" else 80
+            db.set_setting(key, (value or "")[:maxlen])
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # ---- Auto-backup to a cloud-synced folder ----------------------------
+
+    def detect_sync_folders(self) -> dict:
+        """Find likely OneDrive / Google Drive folders so the user can pick one
+        with a click instead of typing a path."""
+        home = os.path.expanduser("~")
+        found, seen = [], set()
+
+        def add(label, path):
+            if path and os.path.isdir(path) and path.lower() not in seen:
+                seen.add(path.lower())
+                found.append({"label": label, "path": path})
+
+        add("OneDrive", os.path.join(home, "OneDrive"))
+        add("Google Drive", os.path.join(home, "Google Drive"))
+        for letter in "GHIJKL":
+            add(f"Google Drive ({letter}:)", f"{letter}:\\My Drive")
+        try:
+            for name in os.listdir(home):
+                if name.lower().startswith("onedrive -"):
+                    add(name, os.path.join(home, name))
+        except OSError:
+            pass
+        return {"folders": found, "home": home}
+
+    def run_autobackup_now(self) -> dict:
+        st = autobackup.backup_now()
+        if st.get("ok"):
+            return {"success": True, "path": st.get("path", "")}
+        return {"success": False, "error": st.get("error", "unknown")}
+
+    def backup_to_folder(self, folder: str) -> dict:
+        """Manual one-off backup to a folder, without changing saved settings."""
+        st = autobackup.backup_to(folder or "")
+        if st.get("ok"):
+            return {"success": True, "path": st.get("path", "")}
+        return {"success": False, "error": st.get("error", "unknown")}
+
+    def autobackup_status(self) -> dict:
+        return autobackup.status()
 
     # ---- Backup (safe hot copy of the whole database) --------------------
 

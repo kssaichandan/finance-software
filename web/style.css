@@ -598,6 +598,11 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 .size-opt:hover { border-color: var(--primary); }
 .size-opt.checked { background: var(--primary); color: #fff; border-color: var(--primary); }
 
+/* Auto-backup status line */
+.ab-status { margin-top: 12px; font-size: 13px; font-weight: 600; }
+.ab-status.ok { color: var(--success); }
+.ab-status.err { color: var(--danger); }
+
 /* ── Text-size scaling (Settings) — zoom keeps layout proportional ─ */
 html[data-text-size="large"] .main-content,
 html[data-text-size="large"] .modal-box,
