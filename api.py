@@ -1,11 +1,150 @@
 """Python API exposed to the JavaScript frontend over local HTTP."""
+import calendar
 import csv
+import math
 import os
-from datetime import date
+import sqlite3
+from datetime import date, datetime
 from pathlib import Path
 
 import db
 import models
+
+
+# ── Shared input validation ──────────────────────────────────────────
+def _valid_iso_date(s) -> bool:
+    """True only for a real calendar date in 'YYYY-MM-DD' form. Rejects
+    '2026-02-31' and friends, which the frontend regex can otherwise accept."""
+    try:
+        datetime.strptime(str(s), "%Y-%m-%d")
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _clean_amount(v, field: str = "Amount", allow_zero: bool = False) -> float:
+    """Coerce to a finite, positive (or non-negative) float. Rejects NaN/Inf,
+    blank, and negatives so they can never reach the DB and poison totals."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number.")
+    if not math.isfinite(x):
+        raise ValueError(f"{field} must be a real number.")
+    if x < 0 or (x == 0 and not allow_zero):
+        raise ValueError(f"{field} must be greater than 0.")
+    return x
+
+
+def _csv_safe(v) -> str:
+    """Neutralise CSV / spreadsheet formula injection. A cell that opens with
+    = + - @ (or a control char) is prefixed with a quote so Excel/LibreOffice
+    treat it as text, not a formula."""
+    s = "" if v is None else str(v)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s
+
+
+def _validate_borrower_core(data: dict):
+    """Validate + coerce the numeric/date core of a borrower payload in place.
+    Returns an error message string, or None if everything is OK."""
+    if not _valid_iso_date(data.get("loan_date")):
+        return "Loan Date is not a real calendar date."
+    try:
+        data["loan_amount"] = _clean_amount(data["loan_amount"], "Principal amount")
+        data["installment_amount"] = _clean_amount(data["installment_amount"], "Installment amount")
+    except ValueError as e:
+        return str(e)
+    try:
+        rate = float(data["interest_rate"])
+    except (TypeError, ValueError, KeyError):
+        return "Interest rate must be a number."
+    if not math.isfinite(rate) or rate < 0:
+        return "Interest rate must be 0 or more."
+    data["interest_rate"] = rate
+    try:
+        period = int(data["period_months"])
+    except (TypeError, ValueError, KeyError):
+        return "Period must be a whole number of months."
+    if period < 1:
+        return "Period must be at least 1 month."
+    data["period_months"] = period
+    return None
+
+
+def _delete_guard(password):
+    """Server-side enforcement of the delete password. Returns an error dict if
+    a password is set and the supplied one is missing/wrong, else None. Without
+    this, the password gate would be browser-only and trivially bypassable."""
+    if db.has_password() and not db.verify_password(password or ""):
+        return {"success": False, "error": "Wrong delete password."}
+    return None
+
+
+def _month_label(ym: str) -> str:
+    """'2026-06' -> 'Jun 2026'."""
+    try:
+        y, m = int(ym[:4]), int(ym[5:7])
+        return f"{calendar.month_abbr[m]} {y}"
+    except (ValueError, IndexError):
+        return ym
+
+
+def _recent_months(today: date, n: int) -> list[str]:
+    """The last n 'YYYY-MM' keys ending with today's month, oldest first."""
+    out, yy, mm = [], today.year, today.month
+    for _ in range(n):
+        out.append(f"{yy:04d}-{mm:02d}")
+        mm -= 1
+        if mm == 0:
+            mm, yy = 12, yy - 1
+    out.reverse()
+    return out
+
+
+def _loan_interest_ratios(summaries) -> dict:
+    """borrower_id -> interest/payable. Flat interest is baked into payable, so
+    this fraction of each collected rupee is the interest (profit) portion."""
+    ratio = {}
+    for s in summaries:
+        interest_b = max(0.0, s.total_payable - s.loan_amount)
+        ratio[s.borrower_id] = (interest_b / s.total_payable) if s.total_payable > 0 else 0.0
+    return ratio
+
+
+def _month_breakdown(ym: str, ratio: dict, payment_rows) -> dict:
+    """Earnings for a single 'YYYY-MM': collection split into interest/principal,
+    plus by-payment-mode and by-showroom breakdowns for that month."""
+    collected = interest = 0.0
+    count = 0
+    by_mode: dict[str, float] = {}
+    by_sh: dict[str, float] = {}
+    for r in payment_rows:
+        if (r["d"] or "")[:7] != ym:
+            continue
+        amt = float(r["amount"])
+        collected += amt
+        interest += amt * ratio.get(r["bid"], 0.0)
+        count += 1
+        mode = (r["mode"] or "").strip() or "Unspecified"
+        by_mode[mode] = by_mode.get(mode, 0.0) + amt
+        sh = (r["showroom"] or "").strip() or "(No showroom)"
+        by_sh[sh] = by_sh.get(sh, 0.0) + amt
+    return {
+        "month": ym,
+        "label": _month_label(ym),
+        "collected": collected,
+        "interest": interest,
+        "principal": max(0.0, collected - interest),
+        "penalties": db.sum_in_month("penalties", "charge_date", ym),
+        "seizings": db.sum_in_month("seizings", "seizing_date", ym),
+        "payments_count": count,
+        "by_mode": sorted(({"mode": k, "amount": v} for k, v in by_mode.items()),
+                          key=lambda x: -x["amount"]),
+        "by_showroom": sorted(({"showroom": k, "amount": v} for k, v in by_sh.items()),
+                              key=lambda x: -x["amount"]),
+    }
 
 
 def _row(r) -> dict | None:
@@ -34,6 +173,11 @@ def _summary(s: models.LoanSummary) -> dict:
         "name": s.name,
         "phone": s.phone,
         "vehicle_no": s.vehicle_no,
+        "father_name": s.father_name,
+        "guarantor_name": s.guarantor_name,
+        "address": s.address,
+        "showroom": s.showroom,
+        "vehicle_type": s.vehicle_type,
         "loan_date": s.loan_date.strftime("%Y-%m-%d"),
         "loan_amount": s.loan_amount,
         "interest_rate": s.interest_rate,
@@ -122,10 +266,9 @@ class API:
 
     def add_borrower(self, data: dict) -> dict:
         try:
-            data["loan_amount"] = float(data["loan_amount"])
-            data["interest_rate"] = float(data["interest_rate"])
-            data["period_months"] = int(data["period_months"])
-            data["installment_amount"] = float(data["installment_amount"])
+            err = _validate_borrower_core(data)
+            if err:
+                return {"success": False, "error": err}
             bref = (data.get("book_ref") or "").strip()
             if bref:
                 conflict = db.book_ref_conflict(bref)
@@ -135,15 +278,17 @@ class API:
                                       f"{conflict['name']} (book {conflict['book_ref']}).")}
             bid = db.add_borrower(data)
             return {"success": True, "id": bid}
+        except sqlite3.IntegrityError:
+            return {"success": False,
+                    "error": "Book No / S.No is already in use by another borrower."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def update_borrower(self, borrower_id: int, data: dict) -> dict:
         try:
-            data["loan_amount"] = float(data["loan_amount"])
-            data["interest_rate"] = float(data["interest_rate"])
-            data["period_months"] = int(data["period_months"])
-            data["installment_amount"] = float(data["installment_amount"])
+            err = _validate_borrower_core(data)
+            if err:
+                return {"success": False, "error": err}
             bref = (data.get("book_ref") or "").strip()
             if bref:
                 conflict = db.book_ref_conflict(bref, exclude_id=int(borrower_id))
@@ -153,11 +298,17 @@ class API:
                                       f"{conflict['name']} (book {conflict['book_ref']}).")}
             db.update_borrower(borrower_id, data)
             return {"success": True}
+        except sqlite3.IntegrityError:
+            return {"success": False,
+                    "error": "Book No / S.No is already in use by another borrower."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def delete_borrower(self, borrower_id: int) -> dict:
+    def delete_borrower(self, borrower_id: int, password: str = "") -> dict:
         try:
+            guard = _delete_guard(password)
+            if guard:
+                return guard
             db.delete_borrower(int(borrower_id))
             return {"success": True}
         except Exception as e:
@@ -176,14 +327,17 @@ class API:
 
     def close_loan(self, borrower_id: int) -> dict:
         try:
-            db.update_borrower(borrower_id, {"closed": 1})
+            # Clear the reopened override so it can auto-close normally again.
+            db.update_borrower(borrower_id, {"closed": 1, "reopened": 0})
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def reopen_loan(self, borrower_id: int) -> dict:
         try:
-            db.update_borrower(borrower_id, {"closed": 0})
+            # Set reopened so the fully-paid auto-close rule won't immediately
+            # re-close it. Without this, re-open is a silent no-op on paid loans.
+            db.update_borrower(borrower_id, {"closed": 0, "reopened": 1})
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -192,6 +346,9 @@ class API:
 
     def add_payment(self, data: dict) -> dict:
         try:
+            if not _valid_iso_date(data.get("payment_date")):
+                return {"success": False, "error": "Payment date is not a real calendar date."}
+            amount = _clean_amount(data.get("amount"), "Payment amount")
             receipt = (data.get("receipt_no") or "").strip()
             if receipt:
                 conflict = db.payment_receipt_conflict(receipt)
@@ -203,13 +360,16 @@ class API:
             pid = db.add_payment(
                 borrower_id=int(data["borrower_id"]),
                 payment_date=data["payment_date"],
-                amount=float(data["amount"]),
+                amount=amount,
                 receipt_no=receipt,
                 installment_label=data.get("installment_label", ""),
                 notes=data.get("notes", ""),
                 payment_mode=data.get("payment_mode", ""),
+                showroom=data.get("showroom", ""),
             )
             return {"success": True, "id": pid}
+        except sqlite3.IntegrityError:
+            return {"success": False, "error": "That Receipt No is already used by another payment."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -224,13 +384,13 @@ class API:
             seen: set = set()
             cleaned = []
             for idx, p in enumerate(payments, 1):
-                amount = float(p["amount"])
-                if amount <= 0:
+                try:
+                    amount = _clean_amount(p.get("amount"), f"Payment {idx} amount")
+                except ValueError as e:
+                    return {"success": False, "error": str(e)}
+                if not _valid_iso_date(p.get("payment_date")):
                     return {"success": False,
-                            "error": f"Payment {idx}: amount must be greater than 0."}
-                if not p.get("payment_date"):
-                    return {"success": False,
-                            "error": f"Payment {idx}: payment date is required."}
+                            "error": f"Payment {idx}: date is not a real calendar date."}
                 receipt = (p.get("receipt_no") or "").strip()
                 if receipt:
                     low = receipt.lower()
@@ -253,18 +413,24 @@ class API:
                     "installment_label": p.get("installment_label", ""),
                     "notes": p.get("notes", ""),
                     "payment_mode": p.get("payment_mode", ""),
+                    "showroom": p.get("showroom", ""),
                 })
             ids = db.add_payments_many(bid, cleaned)
             return {"success": True, "ids": ids, "count": len(ids)}
+        except sqlite3.IntegrityError:
+            return {"success": False, "error": "A Receipt No in this batch is already used by another payment."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def add_penalty(self, data: dict) -> dict:
         try:
+            if not _valid_iso_date(data.get("charge_date")):
+                return {"success": False, "error": "Charge date is not a real calendar date."}
+            amount = _clean_amount(data.get("amount"), "Penalty amount")
             pid = db.add_penalty(
                 borrower_id=int(data["borrower_id"]),
                 charge_date=data["charge_date"],
-                amount=float(data["amount"]),
+                amount=amount,
                 receipt_no=data.get("receipt_no", ""),
                 notes=data.get("notes", ""),
             )
@@ -272,8 +438,11 @@ class API:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def delete_payment(self, payment_id: int) -> dict:
+    def delete_payment(self, payment_id: int, password: str = "") -> dict:
         try:
+            guard = _delete_guard(password)
+            if guard:
+                return guard
             db.delete_payment(int(payment_id))
             return {"success": True}
         except Exception as e:
@@ -281,7 +450,9 @@ class API:
 
     def update_payment(self, payment_id: int, data: dict) -> dict:
         try:
-            data["amount"] = float(data["amount"])
+            if "payment_date" in data and not _valid_iso_date(data.get("payment_date")):
+                return {"success": False, "error": "Payment date is not a real calendar date."}
+            data["amount"] = _clean_amount(data.get("amount"), "Payment amount")
             receipt = (data.get("receipt_no") or "").strip()
             if receipt:
                 conflict = db.payment_receipt_conflict(receipt, exclude_id=int(payment_id))
@@ -293,11 +464,16 @@ class API:
             data["receipt_no"] = receipt
             db.update_payment(int(payment_id), data)
             return {"success": True}
+        except sqlite3.IntegrityError:
+            return {"success": False, "error": "That Receipt No is already used by another payment."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def delete_penalty(self, penalty_id: int) -> dict:
+    def delete_penalty(self, penalty_id: int, password: str = "") -> dict:
         try:
+            guard = _delete_guard(password)
+            if guard:
+                return guard
             db.delete_penalty(int(penalty_id))
             return {"success": True}
         except Exception as e:
@@ -305,7 +481,9 @@ class API:
 
     def update_penalty(self, penalty_id: int, data: dict) -> dict:
         try:
-            data["amount"] = float(data["amount"])
+            if "charge_date" in data and not _valid_iso_date(data.get("charge_date")):
+                return {"success": False, "error": "Charge date is not a real calendar date."}
+            data["amount"] = _clean_amount(data.get("amount"), "Penalty amount")
             db.update_penalty(int(penalty_id), data)
             return {"success": True}
         except Exception as e:
@@ -315,18 +493,24 @@ class API:
 
     def add_seizing(self, data: dict) -> dict:
         try:
+            if not _valid_iso_date(data.get("seizing_date")):
+                return {"success": False, "error": "Date is not a real calendar date."}
+            amount = _clean_amount(data.get("amount"), "Seizing amount")
             sid = db.add_seizing(
                 borrower_id=int(data["borrower_id"]),
                 seizing_date=data["seizing_date"],
-                amount=float(data["amount"]),
+                amount=amount,
                 reason=data.get("reason", ""),
             )
             return {"success": True, "id": sid}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def delete_seizing(self, seizing_id: int) -> dict:
+    def delete_seizing(self, seizing_id: int, password: str = "") -> dict:
         try:
+            guard = _delete_guard(password)
+            if guard:
+                return guard
             db.delete_seizing(int(seizing_id))
             return {"success": True}
         except Exception as e:
@@ -334,7 +518,9 @@ class API:
 
     def update_seizing(self, seizing_id: int, data: dict) -> dict:
         try:
-            data["amount"] = float(data["amount"])
+            if "seizing_date" in data and not _valid_iso_date(data.get("seizing_date")):
+                return {"success": False, "error": "Date is not a real calendar date."}
+            data["amount"] = _clean_amount(data.get("amount"), "Seizing amount")
             db.update_seizing(int(seizing_id), data)
             return {"success": True}
         except Exception as e:
@@ -370,6 +556,49 @@ class API:
         try:
             db.reset_password()
             return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ---- App settings (business name, text size) -------------------------
+
+    def get_settings(self) -> dict:
+        return {
+            "business_name": db.get_setting("business_name", ""),
+            "text_size": db.get_setting("text_size", "normal"),
+        }
+
+    def set_setting(self, key: str, value: str) -> dict:
+        allowed = {"business_name", "text_size"}
+        if key not in allowed:
+            return {"success": False, "error": "Unknown setting."}
+        try:
+            db.set_setting(key, (value or "")[:80])
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ---- Backup (safe hot copy of the whole database) --------------------
+
+    def backup_db(self) -> dict:
+        """Write a consistent copy of finance.db to the Downloads folder using
+        SQLite's online backup API (safe even while the app is running)."""
+        from datetime import datetime as _dt
+        try:
+            stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            downloads = Path(os.path.expanduser("~")) / "Downloads"
+            downloads.mkdir(parents=True, exist_ok=True)
+            dest = str(downloads / f"finance_backup_{stamp}.db")
+            src = db.connect()
+            try:
+                dst = sqlite3.connect(dest)
+                try:
+                    with dst:
+                        src.backup(dst)
+                finally:
+                    dst.close()
+            finally:
+                src.close()
+            return {"success": True, "path": dest}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -446,6 +675,50 @@ class API:
         overdue_count = sum(1 for s in summaries if s.is_overdue)
         total_overdue_amt = sum(s.overdue_amount for s in summaries if s.is_overdue)
 
+        # ── Time-based analytics ─────────────────────────────────────
+        # Flat interest is baked into total_payable. We split every collected
+        # rupee into interest vs principal using each loan's own ratio
+        # (interest / payable), so "interest earned" tracks real collections.
+        today = date.today()
+        this_ym = today.strftime("%Y-%m")
+        ratio = _loan_interest_ratios(summaries)
+        pay_rows = db.payment_rows_for_analytics()
+
+        # 6-month trend for the chart.
+        months = _recent_months(today, 6)
+        month_collected = {k: 0.0 for k in months}
+        month_interest = {k: 0.0 for k in months}
+        for r in pay_rows:
+            ym = (r["d"] or "")[:7]
+            if ym in month_collected:
+                amt = float(r["amount"])
+                month_collected[ym] += amt
+                month_interest[ym] += amt * ratio.get(r["bid"], 0.0)
+
+        # Per-showroom all-time aggregates from the loan summaries.
+        sh_acc: dict[str, dict] = {}
+        for s in summaries:
+            sh = (s.showroom or "").strip() or "(No showroom)"
+            a = sh_acc.setdefault(sh, {"showroom": sh, "loans": 0, "principal": 0.0,
+                                       "collected": 0.0, "outstanding": 0.0})
+            a["loans"] += 1
+            a["principal"] += s.loan_amount
+            a["collected"] += s.total_paid
+            a["outstanding"] += s.remaining
+        by_showroom = sorted(sh_acc.values(), key=lambda x: -x["collected"])
+
+        total_interest_expected = max(0.0, total_payable - total_principal)
+        total_interest_earned = sum(
+            s.total_paid * ratio.get(s.borrower_id, 0.0) for s in summaries
+        )
+
+        # Months the user can pick in the selector — every month that has a
+        # payment, plus the current month (so it is always selectable), newest
+        # first.
+        available = db.distinct_payment_months()
+        if this_ym not in available:
+            available = [this_ym] + available
+
         return {
             "total_loans": total_loans,
             "active_loans": active,
@@ -458,7 +731,25 @@ class API:
             "total_seizings": total_seizings,
             "overdue_count": overdue_count,
             "total_overdue_amount": total_overdue_amt,
+            "total_interest_expected": total_interest_expected,
+            "total_interest_earned": total_interest_earned,
+            "this_month": _month_breakdown(this_ym, ratio, pay_rows),
+            "available_months": [{"month": m, "label": _month_label(m)} for m in available],
+            "monthly": [
+                {"month": k, "label": _month_label(k),
+                 "collected": month_collected[k], "interest": month_interest[k]}
+                for k in months
+            ],
+            "by_showroom": by_showroom,
         }
+
+    def get_month_summary(self, ym: str) -> dict:
+        """Earnings breakdown for a single 'YYYY-MM' — drives the Portfolio
+        month selector. Same shape as get_portfolio_summary()['this_month']."""
+        ym = (ym or "")[:7]
+        summaries = models.all_summaries()
+        ratio = _loan_interest_ratios(summaries)
+        return _month_breakdown(ym, ratio, db.payment_rows_for_analytics())
 
     # ---- CSV Export ------------------------------------------------------
 
@@ -484,16 +775,16 @@ class API:
                 for s in overdue:
                     b = db.get_borrower(s.borrower_id)
                     w.writerow([
-                        s.name, s.phone, b["phone2"] or "",
-                        s.vehicle_no,
+                        _csv_safe(s.name), _csv_safe(s.phone), _csv_safe(b["phone2"] or ""),
+                        _csv_safe(s.vehicle_no),
                         s.loan_date.strftime("%d-%m-%y"),
                         s.days_overdue, int(round(s.overdue_amount)),
                         int(round(s.remaining)),
                         int(round(seiz_sums.get(s.borrower_id, 0.0))),
                         s.last_payment_date or "",
-                        b["address"] or "", b["guarantor_name"] or "",
-                        b["guarantor_phone"] or "",
-                        b["guarantor_phone2"] or "",
+                        _csv_safe(b["address"] or ""), _csv_safe(b["guarantor_name"] or ""),
+                        _csv_safe(b["guarantor_phone"] or ""),
+                        _csv_safe(b["guarantor_phone2"] or ""),
                     ])
             return {"success": True, "path": path, "count": len(overdue)}
         except OSError as e:

@@ -92,22 +92,43 @@ window.HELP_CONTENT = {
       },
       {
         h: 'Filter options (Borrowers list)',
+        body: `<p>Open the <b>🔧 Filters</b> panel above the table. Every section you set is
+          combined with <b>AND</b> — a borrower must match <b>all</b> of them (plus the search boxes):</p>
+          <ul>
+            <li><b>Status</b> — Active + Closed / Active only / Closed only</li>
+            <li><b>Standing</b> — Overdue / On time / Advance (paid ahead)</li>
+            <li><b>Overdue severity</b> — ≥ 30 / 60 / 90 days behind, or over ₹1,000 / ₹5,000</li>
+            <li><b>Due date</b> — due today / tomorrow / in 3 / 7 days, or on a date you pick</li>
+            <li><b>Place / Showroom / Vehicle type</b> — pick from values already entered</li>
+            <li><b>Loan amount</b> and <b>Loan date</b> ranges</li>
+            <li><b>Flags</b> — has penalty / has seizing</li>
+            <li><b>Custom conditions</b> — build your own (e.g. <i>Days overdue &gt; 45</i>).
+              <b>All</b> custom conditions must match.</li>
+          </ul>
+          <p>Click a column header (Name, Loan Date, Principal, Overdue, Status) to sort.
+          <b>Clear all</b> resets every filter.</p>`,
+      },
+      {
+        h: 'More features',
         body: `<ul>
-          <li><b>All Active</b> — every borrower who hasn't paid off yet</li>
-          <li><b>Overdue (any)</b> — anyone behind on payments</li>
-          <li><b>Overdue &gt; 1 / 2 / 3 months</b> — by duration (30 / 60 / 90+ days)</li>
-          <li><b>Overdue &gt; ₹1,000 / ₹5,000</b> — by amount of money behind</li>
-          <li><b>Custom overdue</b> — set your own thresholds. Anyone meeting
-            EITHER threshold shows up.</li>
-          <li><b>Due Today / Tomorrow / 3 / 7 days</b> — next installment falls in that window</li>
-          <li><b>Pick Date</b> — show borrowers whose next installment falls on a specific date</li>
+          <li><b>🔍 Find borrower</b> (sidebar) — jump to anyone by name / phone / vehicle / book no, from any screen.</li>
+          <li><b>🧾 Receipt search</b> — the second box on the Borrowers page finds a payment by its receipt number.</li>
+          <li><b>Payment mode</b> — tag each payment as Cash, PhonePe, or Scanner.</li>
+          <li><b>💬 Remind</b> — opens a ready-made WhatsApp reminder for a due / overdue borrower.</li>
+          <li><b>Seizing Money</b> — record repossession / towing / garage costs against a borrower.</li>
+          <li><b>🖨 Print</b> — print one borrower's full statement; <b>Export to PDF</b> prints the whole filtered list.</li>
+          <li><b>💾 Backup</b> (Settings) — save a full copy of your data to Downloads. Do this often.</li>
+          <li><b>🔐 Delete password</b> (Settings) — require a password before any delete.</li>
+          <li><b>Text size</b> (Settings) — make everything bigger.</li>
         </ul>`,
       },
       {
         h: 'Backup your data',
         body: `<p>All your data lives in <b>one file</b>:
           <code>finance.db</code> next to <code>FinanceTracker.exe</code>.</p>
-          <p><b>Weekly backup:</b> close the app → copy <code>finance.db</code>
+          <p><b>Easiest:</b> go to <b>Settings → 💾 Back up now</b> — it saves a dated
+          copy into your Downloads folder. Then copy that file to USB / Google Drive / OneDrive.</p>
+          <p><b>Manual backup:</b> close the app → copy <code>finance.db</code>
           to USB / Google Drive / OneDrive.</p>
           <p><b>To restore on a new computer:</b> place <code>finance.db</code>
           next to a fresh <code>FinanceTracker.exe</code> and run it.</p>`,

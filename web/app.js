@@ -2,15 +2,74 @@
 
 // ── State ────────────────────────────────────────────────────────
 let currentView = 'dashboard';
-let searchQuery = '';      // matches name / phone / vehicle / book ref
+let searchQuery = '';      // each typed word must match name/father/guarantor/place/showroom/phone/vehicle/book ref
 let receiptQuery = '';     // matches receipt numbers (separate input in toolbar)
-let showClosed = false;
-let statusFilter = 'everything';
-let pickDate = '';
-let customMinDays = 0;     // threshold for the "Custom overdue" filter
-let customMinAmount = 0;
+
+// ── Borrowers-list filter panel ──────────────────────────────────
+// Every section below is ANDed together (plus the search + receipt boxes).
+// Empty / 'any' values mean "no constraint for this section".
+function defaultFilters() {
+  return {
+    status: 'everything',   // everything | active | closed
+    standing: 'any',        // any | overdue | ontime | advance
+    overdue: 'any',         // any | d30 | d60 | d90 | a1k | a5k | custom
+    overdueDaysMin: '',     // custom: min days overdue
+    overdueAmtMin: '',      // custom: min overdue ₹
+    due: 'any',             // any | today | tomorrow | d3 | d7 | within | pick
+    pickDate: '',           // ISO yyyy-mm-dd, used when due === 'pick'
+    dueWithin: '',          // custom: due within N days, used when due === 'within'
+    hasPenalty: false,
+    hasSeizing: false,
+    place: '',              // exact match on address
+    showroom: '',
+    vehicleType: '',
+    amountMin: '', amountMax: '',
+    dateFrom: '', dateTo: '',   // loan-date range (ISO)
+    custom: [],             // [{field, op, value}] — build-your-own, all ANDed
+  };
+}
+let filters = defaultFilters();
+
+// Fields the build-your-own custom filter can target. type drives which
+// operators + value input are shown. All keys must exist on a summary object.
+const CUSTOM_FIELDS = [
+  { key: 'name',              label: 'Name',                type: 'text' },
+  { key: 'father_name',       label: 'Father name',         type: 'text' },
+  { key: 'guarantor_name',    label: 'Guarantor name',      type: 'text' },
+  { key: 'address',           label: 'Place / address',     type: 'text' },
+  { key: 'showroom',          label: 'Showroom',            type: 'text' },
+  { key: 'vehicle_type',      label: 'Vehicle type',        type: 'text' },
+  { key: 'vehicle_no',        label: 'Vehicle no',          type: 'text' },
+  { key: 'phone',             label: 'Phone',               type: 'text' },
+  { key: 'book_ref',          label: 'Book / S.No',         type: 'text' },
+  { key: 'loan_amount',       label: 'Loan amount (₹)',     type: 'number' },
+  { key: 'total_payable',     label: 'Total payable (₹)',   type: 'number' },
+  { key: 'total_paid',        label: 'Total paid (₹)',      type: 'number' },
+  { key: 'remaining',         label: 'Remaining (₹)',       type: 'number' },
+  { key: 'overdue_amount',    label: 'Overdue amount (₹)',  type: 'number' },
+  { key: 'days_overdue',      label: 'Days overdue',        type: 'number' },
+  { key: 'total_penalties',   label: 'Penalty total (₹)',   type: 'number' },
+  { key: 'total_seizings',    label: 'Seizing total (₹)',   type: 'number' },
+  { key: 'interest_rate',     label: 'Interest rate (%)',   type: 'number' },
+  { key: 'period_months',     label: 'Period (months)',     type: 'number' },
+  { key: 'months_elapsed',    label: 'Months elapsed',      type: 'number' },
+  { key: 'loan_date',         label: 'Loan date',           type: 'date' },
+  { key: 'last_payment_date', label: 'Last payment date',   type: 'date' },
+  { key: 'status_label',      label: 'Status',              type: 'enum',
+    options: ['Overdue', 'On time', 'Advance', 'Closed'] },
+];
+const CUSTOM_OPS = {
+  text:   [['contains', 'contains'], ['not_contains', 'does not contain'], ['equals', 'is exactly']],
+  number: [['gt', '>'], ['gte', '≥'], ['lt', '<'], ['lte', '≤'], ['eq', '='], ['neq', '≠']],
+  date:   [['on', 'on'], ['before', 'before'], ['after', 'after']],
+  enum:   [['equals', 'is'], ['neq', 'is not']],
+};
+
 let _viewDirty = false;   // set by mutating ops; closeModal refreshes only if true
 let _formDirty = false;   // set by typing in a form; Cancel warns only if true
+let _filtersOpen = false;          // Borrowers filter panel starts collapsed
+let _sortKey = null, _sortDir = 1; // Borrowers table column sort (1=asc, -1=desc)
+let _selectedIds = new Set();      // Borrowers ticked for a selective PDF export
 
 // ── Utilities ────────────────────────────────────────────────────
 function money(v) {
@@ -53,7 +112,7 @@ function installmentText(s) {
 
 function badge(status) {
   const map = {
-    'Overdue': 'danger', 'On time': 'success', 'Advance': 'success',
+    'Overdue': 'danger', 'On time': 'success', 'Advance': 'primary',
     'Closed': 'gray',
   };
   return `<span class="badge badge-${map[status] || 'gray'}">${status}</span>`;
@@ -88,6 +147,10 @@ function parseUserDate(s) {
   let d = parseInt(m[1], 10), mo = parseInt(m[2], 10), y = parseInt(m[3], 10);
   if (y < 100) y += 2000;
   if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 1900 || y > 2100) return null;
+  // Reject impossible calendar dates like 31-02 — the Date must round-trip.
+  // A bad date stored as a loan_date used to crash the entire borrowers list.
+  const probe = new Date(y, mo - 1, d);
+  if (probe.getFullYear() !== y || probe.getMonth() !== mo - 1 || probe.getDate() !== d) return null;
   return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 }
 
@@ -95,6 +158,35 @@ function parseUserDate(s) {
 function validateDateInput(el) {
   const ok = !el.value.trim() || parseUserDate(el.value) !== null;
   el.classList.toggle('input-invalid', !ok);
+}
+
+// Open the OS calendar for the dd-mm-yy text input that sits beside the 📅
+// button, and write the chosen date back in dd-mm-yy form.
+function openDatePicker(btn) {
+  const target = btn.parentElement && btn.parentElement.querySelector('input[type="text"]');
+  if (!target) return;
+  let dp = document.getElementById('_hidden-datepicker');
+  if (!dp) {
+    dp = document.createElement('input');
+    dp.type = 'date';
+    dp.id = '_hidden-datepicker';
+    dp.style.position = 'fixed';
+    dp.style.left = '-9999px';
+    dp.style.top = '0';
+    document.body.appendChild(dp);
+  }
+  dp.value = parseUserDate(target.value) || '';
+  dp.onchange = () => {
+    if (dp.value) {
+      target.value = fmtDate(dp.value);
+      validateDateInput(target);
+      _formDirty = true;
+    }
+  };
+  try {
+    if (typeof dp.showPicker === 'function') dp.showPicker();
+    else { dp.focus(); dp.click(); }
+  } catch (e) { dp.focus(); dp.click(); }
 }
 
 function loading(show) {
@@ -215,6 +307,20 @@ function modeChips(name, current) {
     </label>`).join('')}</div>`;
 }
 
+// Cached distinct showroom names, for the optional per-payment showroom picker.
+let _showroomOpts = null;
+async function ensureShowroomOpts() {
+  if (_showroomOpts) return _showroomOpts;
+  try {
+    const sug = await api('get_suggestions');
+    _showroomOpts = (sug && sug.showroom) || [];
+  } catch (_) { _showroomOpts = []; }
+  return _showroomOpts;
+}
+function showroomDatalistHtml(id) {
+  return `<datalist id="${id}">${(_showroomOpts || []).map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
+}
+
 // True if a borrower has a penalty situation — either PENALTY DUE (loan still
 // running past its period with money owed) or PAID LATE (cleared after the
 // loan period). Same logic as the badge shown in the borrower detail page.
@@ -232,6 +338,44 @@ function hasSeizing(s) {
   return (s.total_seizings || 0) > 0.001;
 }
 
+// ── WhatsApp / SMS reminders ─────────────────────────────────────
+// Build a wa.me click-to-chat link. Assumes Indian numbers (prepends 91 to a
+// bare 10-digit number). Returns null if there's no usable number.
+function waHref(phone, text) {
+  const digits = (phone || '').toString().replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  const num = digits.length === 10 ? '91' + digits : digits;
+  return `https://wa.me/${num}?text=${encodeURIComponent(text || '')}`;
+}
+// Opens WhatsApp with a polite prefilled reminder. `amountText` is already a
+// money() string. Values come from data-* attributes so names with quotes are safe.
+function openWhatsApp(phone, name, amountText, kind) {
+  const biz = (window.BUSINESS_NAME || '').trim();
+  const sign = biz ? `\n— ${biz}` : '';
+  const msg = kind === 'overdue'
+    ? `Namaste ${name}, your payment of ${amountText} is overdue. Kindly clear it at the earliest. Thank you.${sign}`
+    : `Namaste ${name}, a gentle reminder that your installment of ${amountText} is due. Thank you.${sign}`;
+  const href = waHref(phone, msg);
+  if (!href) { toast('No valid 10-digit phone number for this borrower.', 'error'); return; }
+  window.open(href, '_blank');
+}
+function remindFromBtn(btn) {
+  openWhatsApp(btn.dataset.phone, btn.dataset.name, btn.dataset.amt, btn.dataset.kind);
+}
+
+// Jump to the Borrowers list pre-filtered to everyone overdue.
+function gotoOverdue() {
+  filters = defaultFilters();
+  filters.standing = 'overdue';
+  navigate('borrowers');
+}
+
+// Global search (sidebar) — open the Borrowers list filtered to the typed text.
+function globalSearchGo(v) {
+  searchQuery = (v || '').trim();
+  navigate('borrowers');
+}
+
 // ── Navigation ───────────────────────────────────────────────────
 async function navigate(view) {
   currentView = view;
@@ -240,12 +384,32 @@ async function navigate(view) {
   });
   const container = document.getElementById('view');
   container.innerHTML = '';
-  if (view === 'dashboard') await renderDashboard();
-  else if (view === 'borrowers') await renderBorrowers();
-  else if (view === 'add') renderAddBorrower();
-  else if (view === 'portfolio') await renderPortfolio();
-  else if (view === 'help') renderHelp();
-  else if (view === 'settings') await renderSettings();
+  try {
+    if (view === 'dashboard') await renderDashboard();
+    else if (view === 'borrowers') await renderBorrowers();
+    else if (view === 'add') renderAddBorrower();
+    else if (view === 'portfolio') await renderPortfolio();
+    else if (view === 'help') renderHelp();
+    else if (view === 'settings') await renderSettings();
+  } catch (e) {
+    // Never leave a blank white pane — show a retry card instead.
+    loading(false);
+    renderErrorState(e && e.message);
+  }
+}
+
+// Friendly full-screen fallback when a view fails to load (server hiccup,
+// just-shut-down, etc.). Always offers a Retry instead of a blank screen.
+function renderErrorState(msg) {
+  const v = document.getElementById('view');
+  if (!v) return;
+  v.innerHTML = `
+    <div class="empty-state">
+      <div class="empty-icon">⚠️</div>
+      <h3>Couldn't load this screen</h3>
+      <p>The app couldn't reach its data just now. This usually fixes itself.</p>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="refreshCurrentView()">⟳ Retry</button>
+    </div>`;
 }
 
 // ── Password protection (v1.29) ──────────────────────────────────
@@ -263,10 +427,13 @@ async function refreshHasPassword() {
 // requirePasswordThen — show a password prompt before running `action`.
 // If no password is set, falls back to a normal confirm() with `confirmMsg`.
 // `description` is interpolated into the prompt: "This will delete <description>"
+// Calls action(password) once the user confirms. The password is forwarded to
+// the server so the delete is enforced there too (the server independently
+// re-checks it — the browser gate alone is not trusted).
 function requirePasswordThen(description, confirmMsg, action) {
   if (!_hasPassword) {
     if (!confirm(confirmMsg)) return;
-    action();
+    action('');
     return;
   }
   document.getElementById('modal-inner').innerHTML = `
@@ -298,7 +465,7 @@ function requirePasswordThen(description, confirmMsg, action) {
     const r = await api('verify_password', pwd);
     if (r && r.success) {
       closeModal();
-      action();
+      action(pwd);
     } else {
       const errEl = document.getElementById('pw-prompt-error');
       if (errEl) errEl.style.display = '';
@@ -310,6 +477,37 @@ function requirePasswordThen(description, confirmMsg, action) {
 
 async function renderSettings() {
   await refreshHasPassword();
+  let s = { business_name: '', text_size: 'normal' };
+  try { s = await api('get_settings'); } catch (_) {}
+
+  const appCard = `
+    <div class="card" style="padding:18px;margin-bottom:18px">
+      <h3 style="margin-top:0">🏪 Business &amp; Display</h3>
+      <div class="form-group" style="margin-bottom:16px">
+        <label>Business / Shop Name <span style="color:var(--text-muted);font-weight:400">(shown in the sidebar &amp; on printouts)</span></label>
+        <input class="form-control" id="set-business-name" maxlength="60" value="${esc(s.business_name || '')}" placeholder="e.g. Sri Lakshmi Finance" />
+        <button type="button" class="btn btn-sm btn-outline" style="margin-top:8px;align-self:flex-start" onclick="saveBusinessName()">Save name</button>
+      </div>
+      <div class="form-group">
+        <label>Text Size <span style="color:var(--text-muted);font-weight:400">(makes everything bigger)</span></label>
+        <div class="text-size-options">
+          ${[['normal','Normal'],['large','Large'],['xlarge','Extra Large']].map(([sz,lbl]) => `
+            <label class="size-opt ${s.text_size===sz?'checked':''}">
+              <input type="radio" name="text_size" value="${sz}" ${s.text_size===sz?'checked':''} onchange="applyTextSize('${sz}', true)" />
+              <span>${lbl}</span>
+            </label>`).join('')}
+        </div>
+      </div>
+    </div>`;
+
+  const backupCard = `
+    <div class="card" style="padding:18px;margin-bottom:18px">
+      <h3 style="margin-top:0">💾 Backup</h3>
+      <p style="color:var(--text-muted);margin:0 0 14px">Save a complete copy of all your data to your <b>Downloads</b> folder, then copy it to a USB drive or Google Drive / OneDrive. Do this regularly.</p>
+      <button type="button" class="btn btn-primary" onclick="doBackup()">💾 Back up now</button>
+      <p style="color:var(--text-muted);font-size:12.5px;margin:12px 0 0">To restore on another PC: close the app, copy your backup file into the app's folder and rename it to <code>finance.db</code>, then start the app.</p>
+    </div>`;
+
   const setForm = `
     <form id="set-password-form" class="card" style="padding:18px">
       <h3 style="margin-top:0">${_hasPassword ? '🔐 Change Delete Password' : '🔐 Set Delete Password'}</h3>
@@ -348,6 +546,8 @@ async function renderSettings() {
       <p style="color:var(--text-muted);margin:4px 0 0">Local app preferences and security.</p>
     </div>
     <div style="max-width:560px">
+      ${appCard}
+      ${backupCard}
       ${setForm}
       ${resetCard}
     </div>`;
@@ -380,6 +580,57 @@ async function resetPasswordFlow() {
   } else {
     toast('Error: ' + (r && r.error || 'unknown'), 'error');
   }
+}
+
+// ── Business name + text size + backup ───────────────────────────
+async function saveBusinessName() {
+  const el = document.getElementById('set-business-name');
+  const v = el ? el.value : '';
+  const r = await api('set_setting', 'business_name', v);
+  if (r && r.success) {
+    window.BUSINESS_NAME = (v || '').trim();
+    applyBusinessName();
+    toast('Business name saved.', 'success');
+  } else {
+    toast('Error: ' + (r && r.error || 'unknown'), 'error');
+  }
+}
+
+function applyBusinessName() {
+  const el = document.querySelector('.brand-name');
+  if (el) {
+    el.innerHTML = (window.BUSINESS_NAME && window.BUSINESS_NAME.trim())
+      ? esc(window.BUSINESS_NAME) : 'Finance<br>Tracker';
+  }
+}
+
+async function applyTextSize(sz, persist) {
+  document.documentElement.setAttribute('data-text-size', sz || 'normal');
+  document.querySelectorAll('.size-opt').forEach(el => {
+    const inp = el.querySelector('input');
+    el.classList.toggle('checked', inp && inp.value === sz);
+  });
+  if (persist) { try { await api('set_setting', 'text_size', sz); } catch (_) {} }
+}
+
+async function doBackup() {
+  loading(true);
+  let r;
+  try { r = await api('backup_db'); }
+  catch (e) { return; }
+  finally { loading(false); }
+  if (r && r.success) toast('Backup saved → ' + r.path, 'success');
+  else toast('Backup failed: ' + (r && r.error || 'unknown'), 'error');
+}
+
+// Load persisted settings once at startup (text size + business name).
+async function loadAppSettings() {
+  try {
+    const s = await api('get_settings');
+    window.BUSINESS_NAME = (s && s.business_name) || '';
+    applyTextSize((s && s.text_size) || 'normal', false);
+    applyBusinessName();
+  } catch (_) {}
 }
 
 function renderHelp() {
@@ -434,8 +685,25 @@ async function renderDashboard() {
 
   const today = new Date().toISOString().split('T')[0];
   const todayFmt = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+  const view = document.getElementById('view');
 
-  // Due Today — next installment is due today or tomorrow (call them today)
+  // First-run / empty book → a friendly call to action, not two empty panels.
+  if (!summaries || summaries.length === 0) {
+    view.innerHTML = `
+      <div class="page-header">
+        <div><div class="page-title">Dashboard</div><div class="page-subtitle">${todayFmt}</div></div>
+      </div>
+      <div class="empty-state">
+        <div class="empty-icon">👋</div>
+        <h3>Welcome to Finance Tracker</h3>
+        <p>You haven't added any loans yet. Start by creating your first one.</p>
+        <button class="btn btn-primary" style="margin-top:16px;font-size:15px" onclick="navigate('add')">➕ Add your first loan</button>
+        <p style="margin-top:16px"><a onclick="navigate('help')" style="color:var(--primary)">Read the quick guide →</a></p>
+      </div>`;
+    return;
+  }
+
+  // Due Today/Tomorrow — next installment due today or tomorrow.
   const dueToday = summaries.filter(s => {
     if (s.closed || s.is_overdue) return false;
     const nd = nextDueDateFor(s);
@@ -453,7 +721,12 @@ async function renderDashboard() {
     .filter(s => s.is_overdue && s.days_overdue >= 1 && s.days_overdue <= 10)
     .sort((a, b) => a.days_overdue - b.days_overdue);
 
-  const view = document.getElementById('view');
+  const allOverdue = summaries.filter(s => s.is_overdue);
+  const longOverdue = allOverdue.filter(s => s.days_overdue > 10);
+  const toCollect = dueToday.reduce((a, s) => a + (s.installment_amount || 0), 0);
+  const totalOverdueAmt = allOverdue.reduce((a, s) => a + s.overdue_amount, 0);
+  const activeCount = summaries.filter(s => !s.closed).length;
+
   view.innerHTML = `
     <div class="page-header">
       <div>
@@ -465,11 +738,29 @@ async function renderDashboard() {
       </div>
     </div>
 
+    <div class="stat-grid dash-stats">
+      <div class="stat-card success">
+        <div class="stat-label">To Collect — Today &amp; Tomorrow</div>
+        <div class="stat-value success stat-value-md">${money(toCollect)}</div>
+        <div class="stat-sub">${dueToday.length} installment${dueToday.length !== 1 ? 's' : ''} due</div>
+      </div>
+      <div class="stat-card ${allOverdue.length ? 'danger' : 'gray'} clickable" onclick="gotoOverdue()" title="View all overdue borrowers">
+        <div class="stat-label">Overdue (all)</div>
+        <div class="stat-value ${allOverdue.length ? 'danger' : ''} stat-value-md">${money(totalOverdueAmt)}</div>
+        <div class="stat-sub">${allOverdue.length} borrower${allOverdue.length !== 1 ? 's' : ''}${longOverdue.length ? ` · ${longOverdue.length} over 10 days` : ''} · View all →</div>
+      </div>
+      <div class="stat-card gray">
+        <div class="stat-label">Active Loans</div>
+        <div class="stat-value stat-value-md">${activeCount}</div>
+        <div class="stat-sub">${summaries.length} total in your book</div>
+      </div>
+    </div>
+
     <div class="dash-grid">
 
       <div class="dash-section">
         <div class="dash-section-header due-today-header">
-          <span class="dash-section-title">Due Today</span>
+          <span class="dash-section-title">Due Today &amp; Tomorrow</span>
           <span class="dash-section-count">${dueToday.length} borrower${dueToday.length !== 1 ? 's' : ''}</span>
         </div>
         <div class="dash-section-body">
@@ -494,7 +785,12 @@ async function renderDashboard() {
                 </div>
                 <div class="dash-card-bot">
                   <span class="dash-amount due-amount">${money(s.installment_amount)} due</span>
-                  <span class="dash-days" style="${dStyle}">${dLabel}</span>
+                  <span class="dash-card-actions">
+                    ${s.phone ? `<button class="dash-remind" title="Send WhatsApp reminder"
+                      data-phone="${esc(s.phone)}" data-name="${esc(s.name)}" data-amt="${esc(money(s.installment_amount))}" data-kind="due"
+                      onclick="event.stopPropagation(); remindFromBtn(this)">💬</button>` : ''}
+                    <span class="dash-days" style="${dStyle}">${dLabel}</span>
+                  </span>
                 </div>
               </div>`}).join('')}
         </div>
@@ -520,7 +816,12 @@ async function renderDashboard() {
                 </div>
                 <div class="dash-card-bot">
                   <span class="dash-amount overdue-amount">${money(s.overdue_amount)} overdue</span>
-                  <span class="dash-days">${s.days_overdue}d ago</span>
+                  <span class="dash-card-actions">
+                    ${s.phone ? `<button class="dash-remind" title="Send WhatsApp reminder"
+                      data-phone="${esc(s.phone)}" data-name="${esc(s.name)}" data-amt="${esc(money(s.overdue_amount))}" data-kind="overdue"
+                      onclick="event.stopPropagation(); remindFromBtn(this)">💬</button>` : ''}
+                    <span class="dash-days">${s.days_overdue}d ago</span>
+                  </span>
                 </div>
               </div>`).join('')}
         </div>
@@ -536,6 +837,11 @@ async function renderBorrowers() {
   let summaries;
   try { summaries = await api('get_all_borrowers'); }
   finally { loading(false); }
+
+  // Choices for the Place / Showroom / Vehicle-type filters come from values
+  // already entered on borrowers. Non-critical — fall back to empty lists.
+  let suggestions = {};
+  try { suggestions = await api('get_suggestions'); } catch (_) {}
 
   const today = new Date().toISOString().split('T')[0];
   const overdueSummaries = summaries.filter(s => s.is_overdue);
@@ -566,69 +872,36 @@ async function renderBorrowers() {
     </div>
     <div class="search-row">
       <input class="search-input" id="borrow-search" type="text"
-        placeholder="Search name / phone / vehicle / book ref…"
+        placeholder="Search name, then add father / guarantor / place / showroom…"
+        title="Type a name, then keep adding words (father name, guarantor, place, showroom, phone, vehicle, book ref) to narrow down — every word must match."
         value="${esc(searchQuery)}"
         oninput="filterBorrowers(this.value)" />
       <input class="search-input search-input-receipt" id="receipt-search" type="text"
         placeholder="🧾 Search receipt no…"
         value="${esc(receiptQuery)}"
         oninput="setReceiptQuery(this.value)" />
-      <select class="filter-select" id="status-filter-select"
-        onchange="setStatusFilter(this.value)">
-        <option value="everything" ${statusFilter==='everything'  ?'selected':''}>All Borrowers (Active + Closed)</option>
-        <option value="all"         ${statusFilter==='all'         ?'selected':''}>Active Only</option>
-        <option value="penalty"     ${statusFilter==='penalty'     ?'selected':''}>Has Penalty (Due or Paid Late)</option>
-        <option value="seizing"     ${statusFilter==='seizing'     ?'selected':''}>Has Seizing Money</option>
-        <option value="overdue"     ${statusFilter==='overdue'     ?'selected':''}>Overdue (any)</option>
-        <option value="od_1m"       ${statusFilter==='od_1m'       ?'selected':''}>Overdue > 1 month (30+ days)</option>
-        <option value="od_2m"       ${statusFilter==='od_2m'       ?'selected':''}>Overdue > 2 months (60+ days)</option>
-        <option value="od_3m"       ${statusFilter==='od_3m'       ?'selected':''}>Overdue > 3 months (90+ days)</option>
-        <option value="od_1k"       ${statusFilter==='od_1k'       ?'selected':''}>Overdue > ₹1,000</option>
-        <option value="od_5k"       ${statusFilter==='od_5k'       ?'selected':''}>Overdue > ₹5,000</option>
-        <option value="od_custom"   ${statusFilter==='od_custom'   ?'selected':''}>Custom overdue filter…</option>
-        <option value="ontime"      ${statusFilter==='ontime'      ?'selected':''}>On Time</option>
-        <option value="advance"     ${statusFilter==='advance'     ?'selected':''}>Advance</option>
-        <option value="closed"      ${statusFilter==='closed'      ?'selected':''}>Closed</option>
-        <option value="due_today"   ${statusFilter==='due_today'   ?'selected':''}>Due Today</option>
-        <option value="due_tomorrow"${statusFilter==='due_tomorrow'?'selected':''}>Due Tomorrow</option>
-        <option value="due_3days"   ${statusFilter==='due_3days'   ?'selected':''}>Due in 3 Days</option>
-        <option value="due_7days"   ${statusFilter==='due_7days'   ?'selected':''}>Due in 7 Days</option>
-        <option value="pick_date"   ${statusFilter==='pick_date'   ?'selected':''}>Pick Date…</option>
-      </select>
-      <input type="text" id="pick-date-input" class="form-control pick-date-input"
-        placeholder="dd-mm-yy" maxlength="10"
-        value="${esc(fmtDate(pickDate))}"
-        style="${statusFilter !== 'pick_date' ? 'display:none' : ''}"
-        onchange="setPickDate(this.value)" />
-      <input type="number" id="custom-min-days" class="form-control pick-date-input"
-        placeholder="Min days overdue" min="0"
-        value="${customMinDays || ''}"
-        style="${statusFilter !== 'od_custom' ? 'display:none' : ''}"
-        oninput="setCustomMinDays(this.value)" />
-      <input type="number" id="custom-min-amount" class="form-control pick-date-input"
-        placeholder="Min ₹ overdue" min="0"
-        value="${customMinAmount || ''}"
-        style="${statusFilter !== 'od_custom' ? 'display:none' : ''}"
-        oninput="setCustomMinAmount(this.value)" />
-      <label class="filter-label" id="closed-toggle"
-        style="${statusFilter !== 'all' ? 'display:none' : ''}">
-        <input type="checkbox" id="closed-check" ${showClosed ? 'checked' : ''}
-          onchange="toggleClosed(this.checked)" />
-        + Closed
-      </label>
-      <button class="btn btn-outline btn-sm" onclick="exportBorrowersPDF()"
-        title="Export the currently-filtered borrowers list as a PDF (uses Edge print → Save as PDF)">
+      <button id="pdf-export-btn" class="btn btn-outline btn-sm" onclick="exportBorrowersPDF()"
+        title="Tick the rows you want to export only those. Tick none to export the whole filtered list.">
         📄 Export to PDF
       </button>
+      <span id="selection-info" class="selection-info"></span>
     </div>
+    ${renderFilterPanel(suggestions)}
     <div id="receipt-match-slot"></div>
     <div class="card">
       <div class="table-wrap table-scroll-full">
         <table class="data-table">
           <thead>
             <tr>
-              <th>Book Ref</th><th>Name</th><th>Phone</th><th>Vehicle No</th><th>Loan Date</th>
-              <th>Principal</th><th>Installments</th><th>Overdue</th><th>Status</th>
+              <th class="th-check"><input type="checkbox" id="select-all-rows" title="Select / clear all shown" onclick="toggleSelectAll(this.checked)"></th>
+              <th class="th-sort" data-sort="book_ref" onclick="sortBorrowers('book_ref')">Book Ref<span class="sort-caret"></span></th>
+              <th class="th-sort" data-sort="name" onclick="sortBorrowers('name')">Name<span class="sort-caret"></span></th>
+              <th>Phone</th><th>Vehicle No</th>
+              <th class="th-sort" data-sort="loan_date" onclick="sortBorrowers('loan_date')">Loan Date<span class="sort-caret"></span></th>
+              <th class="th-sort" data-sort="loan_amount" onclick="sortBorrowers('loan_amount')">Principal<span class="sort-caret"></span></th>
+              <th>Installments</th>
+              <th class="th-sort" data-sort="overdue_amount" onclick="sortBorrowers('overdue_amount')">Overdue<span class="sort-caret"></span></th>
+              <th class="th-sort" data-sort="status_label" onclick="sortBorrowers('status_label')">Status<span class="sort-caret"></span></th>
             </tr>
           </thead>
           <tbody id="borrow-tbody"></tbody>
@@ -638,6 +911,7 @@ async function renderBorrowers() {
   `;
 
   window._allSummaries = summaries;
+  _selectedIds = new Set();   // fresh selection each time the page is built
   filterBorrowers(searchQuery);
 }
 
@@ -693,57 +967,83 @@ function renderReceiptMatchCard() {
 // Pure predicate — true if a summary should be shown given current filter+search.
 // Factored out so both the Borrowers list and the PDF export use the exact same logic.
 function passesBorrowerFilter(s, today, q) {
-  if (statusFilter === 'everything') {
-    // show all borrowers — active and closed, no status filtering
-  } else if (statusFilter === 'all') {
-    if (!showClosed && s.closed) return false;
-  } else if (statusFilter === 'penalty') {
-    if (!hasPenalty(s)) return false;
-  } else if (statusFilter === 'seizing') {
-    if (!hasSeizing(s)) return false;
-  } else if (statusFilter === 'overdue') {
+  const f = filters;
+
+  // ── Status (lifecycle) ──
+  if (f.status === 'active' && s.closed) return false;
+  if (f.status === 'closed' && !s.closed) return false;
+
+  // ── Standing ──
+  if (f.standing === 'overdue' && !s.is_overdue) return false;
+  if (f.standing === 'ontime'  && (s.closed || s.is_overdue || s.is_advance)) return false;
+  if (f.standing === 'advance' && !s.is_advance) return false;
+
+  // ── Overdue severity (implies overdue) ──
+  if (f.overdue !== 'any') {
     if (!s.is_overdue) return false;
-  } else if (statusFilter === 'od_1m') {
-    if (!s.is_overdue || s.days_overdue < 30) return false;
-  } else if (statusFilter === 'od_2m') {
-    if (!s.is_overdue || s.days_overdue < 60) return false;
-  } else if (statusFilter === 'od_3m') {
-    if (!s.is_overdue || s.days_overdue < 90) return false;
-  } else if (statusFilter === 'od_1k') {
-    if (!s.is_overdue || s.overdue_amount < 1000) return false;
-  } else if (statusFilter === 'od_5k') {
-    if (!s.is_overdue || s.overdue_amount < 5000) return false;
-  } else if (statusFilter === 'od_custom') {
-    if (!s.is_overdue) return false;
-    if (customMinDays > 0 || customMinAmount > 0) {
-      const okDays = customMinDays > 0 && s.days_overdue >= customMinDays;
-      const okAmt = customMinAmount > 0 && s.overdue_amount >= customMinAmount;
-      if (!okDays && !okAmt) return false;
+    if (f.overdue === 'd30' && s.days_overdue < 30) return false;
+    if (f.overdue === 'd60' && s.days_overdue < 60) return false;
+    if (f.overdue === 'd90' && s.days_overdue < 90) return false;
+    if (f.overdue === 'a1k' && s.overdue_amount < 1000) return false;
+    if (f.overdue === 'a5k' && s.overdue_amount < 5000) return false;
+    if (f.overdue === 'custom') {
+      const dMin = parseFloat(f.overdueDaysMin);
+      if (!isNaN(dMin) && s.days_overdue < dMin) return false;
+      const aMin = parseFloat(f.overdueAmtMin);
+      if (!isNaN(aMin) && s.overdue_amount < aMin) return false;
     }
-  } else if (statusFilter === 'ontime') {
-    if (s.closed || s.is_overdue || s.is_advance) return false;
-  } else if (statusFilter === 'advance') {
-    if (!s.is_advance) return false;
-  } else if (statusFilter === 'closed') {
-    if (!s.closed) return false;
-  } else {
+  }
+
+  // ── Flags ──
+  if (f.hasPenalty && !hasPenalty(s)) return false;
+  if (f.hasSeizing && !hasSeizing(s)) return false;
+
+  // ── Due-date window ──
+  if (f.due !== 'any') {
     const nd = nextDueDateFor(s);
     if (!nd) return false;
     const daysUntil = Math.round((new Date(nd) - new Date(today)) / 86400000);
-    if (statusFilter === 'due_today'    && daysUntil !== 0) return false;
-    if (statusFilter === 'due_tomorrow' && daysUntil !== 1) return false;
-    if (statusFilter === 'due_3days'    && (daysUntil < 0 || daysUntil > 3)) return false;
-    if (statusFilter === 'due_7days'    && (daysUntil < 0 || daysUntil > 7)) return false;
-    if (statusFilter === 'pick_date'    && pickDate && nd !== pickDate) return false;
+    if (f.due === 'today'    && daysUntil !== 0) return false;
+    if (f.due === 'tomorrow' && daysUntil !== 1) return false;
+    if (f.due === 'd3'       && (daysUntil < 0 || daysUntil > 3)) return false;
+    if (f.due === 'd7'       && (daysUntil < 0 || daysUntil > 7)) return false;
+    if (f.due === 'within') {
+      const n = parseFloat(f.dueWithin);
+      if (!isNaN(n) && (daysUntil < 0 || daysUntil > n)) return false;
+    }
+    if (f.due === 'pick'     && f.pickDate && nd !== f.pickDate) return false;
   }
-  // Normal search box: name / phone / vehicle / book ref
+
+  // ── Category exact matches (case-insensitive) ──
+  if (f.place && (s.address || '').toLowerCase() !== f.place.toLowerCase()) return false;
+  if (f.showroom && (s.showroom || '').toLowerCase() !== f.showroom.toLowerCase()) return false;
+  if (f.vehicleType && (s.vehicle_type || '').toLowerCase() !== f.vehicleType.toLowerCase()) return false;
+
+  // ── Loan amount range ──
+  const amin = parseFloat(f.amountMin);
+  if (!isNaN(amin) && s.loan_amount < amin) return false;
+  const amax = parseFloat(f.amountMax);
+  if (!isNaN(amax) && s.loan_amount > amax) return false;
+
+  // ── Loan date range (ISO string compare is safe for yyyy-mm-dd) ──
+  if (f.dateFrom && s.loan_date < f.dateFrom) return false;
+  if (f.dateTo && s.loan_date > f.dateTo) return false;
+
+  // ── Build-your-own custom conditions (all must match) ──
+  for (const c of (f.custom || [])) {
+    if (!matchesCustomCondition(s, c)) return false;
+  }
+
+  // Normal search box: each typed word must match at least one field, so you
+  // can start with the name and keep adding words (father / guarantor / place /
+  // showroom) to narrow down when several borrowers share the same name.
   if (q) {
-    const lq = q.toLowerCase();
-    const matched =
-         (s.name || '').toLowerCase().includes(lq)
-      || (s.phone || '').toLowerCase().includes(lq)
-      || (s.vehicle_no || '').toLowerCase().includes(lq)
-      || (s.book_ref || '').toLowerCase().includes(lq);
+    const fields = [
+      s.name, s.phone, s.vehicle_no, s.book_ref,
+      s.father_name, s.guarantor_name, s.address, s.showroom,
+    ].map(x => (x || '').toString().toLowerCase());
+    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const matched = terms.every(t => fields.some(f => f.includes(t)));
     if (!matched) return false;
   }
   // Dedicated receipt search box: check this borrower's receipts
@@ -780,30 +1080,51 @@ function findReceiptMatches() {
   return out;
 }
 
-// Human-readable label for the active filter — used as the PDF heading.
+// Human-readable summary of every active filter — used as the PDF heading and
+// as the "n active" hint in the panel. Returns 'All Borrowers' when nothing set.
+function activeFilterParts() {
+  const f = filters;
+  const parts = [];
+  if (f.status === 'active') parts.push('Active only');
+  else if (f.status === 'closed') parts.push('Closed only');
+  if (f.standing === 'overdue') parts.push('Overdue');
+  else if (f.standing === 'ontime') parts.push('On time');
+  else if (f.standing === 'advance') parts.push('Advance');
+  const odMap = { d30: 'Overdue ≥30d', d60: 'Overdue ≥60d', d90: 'Overdue ≥90d',
+                  a1k: 'Overdue >₹1,000', a5k: 'Overdue >₹5,000' };
+  if (odMap[f.overdue]) parts.push(odMap[f.overdue]);
+  else if (f.overdue === 'custom') {
+    const bits = [];
+    if (f.overdueDaysMin) bits.push(`≥${f.overdueDaysMin}d`);
+    if (f.overdueAmtMin) bits.push(`≥₹${f.overdueAmtMin}`);
+    parts.push(bits.length ? 'Overdue ' + bits.join(' & ') : 'Overdue (custom)');
+  }
+  if (f.hasPenalty) parts.push('Has penalty');
+  if (f.hasSeizing) parts.push('Has seizing');
+  const dueMap = { today: 'Due today', tomorrow: 'Due tomorrow', d3: 'Due in 3 days',
+                   d7: 'Due in 7 days' };
+  if (dueMap[f.due]) parts.push(dueMap[f.due]);
+  else if (f.due === 'within') parts.push(`Due within ${f.dueWithin || '—'} days`);
+  else if (f.due === 'pick') parts.push(`Due on ${f.pickDate ? fmtDate(f.pickDate) : '—'}`);
+  if (f.place) parts.push(`Place: ${f.place}`);
+  if (f.showroom) parts.push(`Showroom: ${f.showroom}`);
+  if (f.vehicleType) parts.push(`Vehicle: ${f.vehicleType}`);
+  if (f.amountMin || f.amountMax)
+    parts.push(`Amount ${f.amountMin || '0'}–${f.amountMax || '∞'}`);
+  if (f.dateFrom || f.dateTo)
+    parts.push(`Loan date ${f.dateFrom ? fmtDate(f.dateFrom) : '…'}–${f.dateTo ? fmtDate(f.dateTo) : '…'}`);
+  for (const c of (f.custom || [])) {
+    if (!c || !c.field || c.value === '' || c.value == null) continue;
+    const meta = CUSTOM_FIELDS.find(m => m.key === c.field);
+    const opLabel = (CUSTOM_OPS[meta ? meta.type : 'text'].find(o => o[0] === c.op) || ['', c.op])[1];
+    parts.push(`${meta ? meta.label : c.field} ${opLabel} ${c.value}`);
+  }
+  return parts;
+}
+
 function currentFilterLabel() {
-  const map = {
-    everything: 'All Borrowers (Active + Closed)',
-    all: showClosed ? 'Active + Closed' : 'Active Only',
-    penalty: 'Has Penalty (Due or Paid Late)',
-    seizing: 'Has Seizing Money',
-    overdue: 'Overdue (any)',
-    od_1m: 'Overdue > 1 month (30+ days)',
-    od_2m: 'Overdue > 2 months (60+ days)',
-    od_3m: 'Overdue > 3 months (90+ days)',
-    od_1k: 'Overdue > ₹1,000',
-    od_5k: 'Overdue > ₹5,000',
-    od_custom: `Custom overdue (min ${customMinDays || 0} days OR ₹${customMinAmount || 0})`,
-    ontime: 'On Time',
-    advance: 'Advance',
-    closed: 'Closed',
-    due_today: 'Due Today',
-    due_tomorrow: 'Due Tomorrow',
-    due_3days: 'Due in next 3 days',
-    due_7days: 'Due in next 7 days',
-    pick_date: `Due on ${pickDate ? fmtDate(pickDate) : '—'}`,
-  };
-  let label = map[statusFilter] || statusFilter;
+  const parts = activeFilterParts();
+  let label = parts.length ? parts.join(' · ') : 'All Borrowers (Active + Closed)';
   if (searchQuery) label += ` · search: "${searchQuery}"`;
   return label;
 }
@@ -818,15 +1139,30 @@ function filterBorrowers(q) {
 
   const rows = summaries.filter(s => passesBorrowerFilter(s, today, q));
 
-  const baseCount = statusFilter === 'all'
-    ? summaries.filter(s => showClosed || !s.closed).length
-    : summaries.length;
+  // Optional column sort (default order = server's overdue-first grouping).
+  if (_sortKey) {
+    const k = _sortKey, dir = _sortDir;
+    rows.sort((a, b) => {
+      let va = a[k], vb = b[k];
+      if (k === 'name' || k === 'status_label' || k === 'book_ref' || k === 'loan_date') {
+        va = (va || '').toString().toLowerCase();
+        vb = (vb || '').toString().toLowerCase();
+        return va < vb ? -dir : va > vb ? dir : 0;
+      }
+      return ((parseFloat(va) || 0) - (parseFloat(vb) || 0)) * dir;
+    });
+  }
+
   document.getElementById('borrow-count').textContent =
-    `Showing ${rows.length} of ${baseCount} borrowers`;
+    `Showing ${rows.length} of ${summaries.length} borrowers`;
+  updateActiveFilterCount();
+  updateSortCarets();
+  updateSelectAllState(rows);
+  updateSelectionUI();
 
   tbody.innerHTML = '';
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr class="no-data"><td colspan="9">No borrowers found.</td></tr>`;
+    tbody.innerHTML = `<tr class="no-data"><td colspan="10">No borrowers found.</td></tr>`;
     return;
   }
   rows.forEach(s => {
@@ -839,7 +1175,10 @@ function filterBorrowers(q) {
       : '<span style="color:var(--text-muted);font-size:12px">—</span>';
     const tr = document.createElement('tr');
     tr.className = rowCls;
+    const checked = _selectedIds.has(s.borrower_id) ? 'checked' : '';
     tr.innerHTML = `
+      <td class="td-check"><input type="checkbox" class="row-check" ${checked}
+        onclick="event.stopPropagation(); toggleRowSelect(${s.borrower_id}, this.checked)"></td>
       <td>${bookRefTd}</td>
       <td><strong>${esc(s.name)}</strong></td>
       <td>${esc(s.phone) || '—'}</td>
@@ -856,9 +1195,396 @@ function filterBorrowers(q) {
   });
 }
 
-function toggleClosed(val) {
-  showClosed = val;
+// ── Row selection (for selective PDF export) ─────────────────────
+function _shownRows() {
+  const summaries = window._allSummaries || [];
+  const today = new Date().toISOString().split('T')[0];
+  return summaries.filter(s => passesBorrowerFilter(s, today, searchQuery));
+}
+
+function toggleRowSelect(id, checked) {
+  if (checked) _selectedIds.add(id); else _selectedIds.delete(id);
+  updateSelectAllState(_shownRows());
+  updateSelectionUI();
+}
+
+function toggleSelectAll(checked) {
+  _shownRows().forEach(s => {
+    if (checked) _selectedIds.add(s.borrower_id); else _selectedIds.delete(s.borrower_id);
+  });
+  document.querySelectorAll('#borrow-tbody .row-check').forEach(cb => { cb.checked = checked; });
+  const sa = document.getElementById('select-all-rows');
+  if (sa) sa.indeterminate = false;
+  updateSelectionUI();
+}
+
+function clearSelection() {
+  _selectedIds.clear();
+  document.querySelectorAll('#borrow-tbody .row-check').forEach(cb => { cb.checked = false; });
+  const sa = document.getElementById('select-all-rows');
+  if (sa) { sa.checked = false; sa.indeterminate = false; }
+  updateSelectionUI();
+}
+
+// Tri-state header checkbox: checked if all shown are selected, dash if some.
+function updateSelectAllState(shownRows) {
+  const sa = document.getElementById('select-all-rows');
+  if (!sa) return;
+  const shown = shownRows || [];
+  const allSel = shown.length > 0 && shown.every(s => _selectedIds.has(s.borrower_id));
+  sa.checked = allSel;
+  sa.indeterminate = !allSel && shown.some(s => _selectedIds.has(s.borrower_id));
+}
+
+function updateSelectionUI() {
+  const n = _selectedIds.size;
+  const info = document.getElementById('selection-info');
+  if (info) info.innerHTML = n > 0
+    ? `<b>${n}</b> selected · <a class="sel-clear" onclick="clearSelection()">clear</a>`
+    : '';
+  const btn = document.getElementById('pdf-export-btn');
+  if (btn) btn.textContent = n > 0 ? `📄 Export ${n} to PDF` : '📄 Export to PDF';
+}
+
+// ── Filter panel: rendering ──────────────────────────────────────
+function optionList(values, selected) {
+  const opts = ['<option value="">— Any —</option>'];
+  for (const v of (values || [])) {
+    opts.push(`<option value="${esc(v)}" ${selected === v ? 'selected' : ''}>${esc(v)}</option>`);
+  }
+  return opts.join('');
+}
+
+function renderFilterPanel(sug) {
+  sug = sug || {};
+  const f = filters;
+  const sel = (cur, val) => cur === val ? 'selected' : '';
+  // Open the panel automatically if any filter is already active, otherwise
+  // keep it collapsed so the table isn't pushed down by the big panel.
+  if (activeFilterParts().length > 0) _filtersOpen = true;
+  const open = _filtersOpen;
+  return `
+  <div class="filter-panel ${open ? 'open' : 'collapsed'}" id="filter-panel">
+    <div class="filter-panel-head">
+      <button class="fp-toggle" onclick="toggleFilters()" aria-expanded="${open}">
+        <span class="fp-caret">${open ? '▾' : '▸'}</span> 🔧 Filters
+      </button>
+      <span class="fp-active" id="fp-active-count"></span>
+      <button class="btn btn-sm btn-outline fp-clear" onclick="clearAllFilters()">✕ Clear all</button>
+    </div>
+    <div class="filter-body" ${open ? '' : 'style="display:none"'}>
+    <div class="filter-grid">
+      <div class="filter-field">
+        <label>Status</label>
+        <select class="filter-select" onchange="setFilter('status', this.value)">
+          <option value="everything" ${sel(f.status,'everything')}>Active + Closed</option>
+          <option value="active" ${sel(f.status,'active')}>Active only</option>
+          <option value="closed" ${sel(f.status,'closed')}>Closed only</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>Standing</label>
+        <select class="filter-select" onchange="setFilter('standing', this.value)">
+          <option value="any" ${sel(f.standing,'any')}>Any</option>
+          <option value="overdue" ${sel(f.standing,'overdue')}>Overdue</option>
+          <option value="ontime" ${sel(f.standing,'ontime')}>On time</option>
+          <option value="advance" ${sel(f.standing,'advance')}>Advance (paid ahead)</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>Overdue severity</label>
+        <select class="filter-select" onchange="setFilterOverdue(this.value)">
+          <option value="any" ${sel(f.overdue,'any')}>Any</option>
+          <option value="d30" ${sel(f.overdue,'d30')}>≥ 30 days</option>
+          <option value="d60" ${sel(f.overdue,'d60')}>≥ 60 days</option>
+          <option value="d90" ${sel(f.overdue,'d90')}>≥ 90 days</option>
+          <option value="a1k" ${sel(f.overdue,'a1k')}>over ₹1,000</option>
+          <option value="a5k" ${sel(f.overdue,'a5k')}>over ₹5,000</option>
+          <option value="custom" ${sel(f.overdue,'custom')}>Custom…</option>
+        </select>
+        <div class="filter-range" id="overdue-custom"
+          style="margin-top:6px;${f.overdue !== 'custom' ? 'display:none' : ''}">
+          <input type="number" class="form-control" placeholder="≥ days" min="0"
+            value="${esc(f.overdueDaysMin)}" oninput="setFilter('overdueDaysMin', this.value)" />
+          <span class="range-dash">&</span>
+          <input type="number" class="form-control" placeholder="≥ ₹" min="0"
+            value="${esc(f.overdueAmtMin)}" oninput="setFilter('overdueAmtMin', this.value)" />
+        </div>
+      </div>
+      <div class="filter-field">
+        <label>Due date</label>
+        <select class="filter-select" onchange="setFilterDue(this.value)">
+          <option value="any" ${sel(f.due,'any')}>Any</option>
+          <option value="today" ${sel(f.due,'today')}>Due today</option>
+          <option value="tomorrow" ${sel(f.due,'tomorrow')}>Due tomorrow</option>
+          <option value="d3" ${sel(f.due,'d3')}>Due in 3 days</option>
+          <option value="d7" ${sel(f.due,'d7')}>Due in 7 days</option>
+          <option value="within" ${sel(f.due,'within')}>Due within N days…</option>
+          <option value="pick" ${sel(f.due,'pick')}>Due on date…</option>
+        </select>
+        <input type="number" id="filter-due-within" class="form-control" placeholder="within N days" min="0"
+          value="${esc(f.dueWithin)}"
+          style="margin-top:6px;${f.due !== 'within' ? 'display:none' : ''}"
+          oninput="setFilter('dueWithin', this.value)" />
+        <input type="text" id="filter-pick-date" class="form-control" placeholder="dd-mm-yy"
+          maxlength="10" value="${esc(fmtDate(f.pickDate))}"
+          style="margin-top:6px;${f.due !== 'pick' ? 'display:none' : ''}"
+          onchange="setFilterPickDate(this.value)" />
+      </div>
+      <div class="filter-field">
+        <label>Place / address</label>
+        <select class="filter-select" onchange="setFilter('place', this.value)">
+          ${optionList(sug.address, f.place)}
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>Showroom</label>
+        <select class="filter-select" onchange="setFilter('showroom', this.value)">
+          ${optionList(sug.showroom, f.showroom)}
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>Vehicle type</label>
+        <select class="filter-select" onchange="setFilter('vehicleType', this.value)">
+          ${optionList(sug.vehicle_type, f.vehicleType)}
+        </select>
+      </div>
+      <div class="filter-field">
+        <label>Loan amount (₹)</label>
+        <div class="filter-range">
+          <input type="number" class="form-control" placeholder="min" min="0" value="${esc(f.amountMin)}"
+            oninput="setFilter('amountMin', this.value)" />
+          <span class="range-dash">–</span>
+          <input type="number" class="form-control" placeholder="max" min="0" value="${esc(f.amountMax)}"
+            oninput="setFilter('amountMax', this.value)" />
+        </div>
+      </div>
+      <div class="filter-field">
+        <label>Loan date</label>
+        <div class="filter-range">
+          <input type="text" class="form-control" placeholder="from dd-mm-yy" maxlength="10"
+            value="${esc(fmtDate(f.dateFrom))}" onchange="setFilterDate('dateFrom', this.value)" />
+          <span class="range-dash">–</span>
+          <input type="text" class="form-control" placeholder="to dd-mm-yy" maxlength="10"
+            value="${esc(fmtDate(f.dateTo))}" onchange="setFilterDate('dateTo', this.value)" />
+        </div>
+      </div>
+      <div class="filter-field">
+        <label>Flags</label>
+        <div class="filter-checks">
+          <label class="filter-label"><input type="checkbox" ${f.hasPenalty ? 'checked' : ''}
+            onchange="toggleFilterFlag('hasPenalty', this.checked)" /> Has penalty</label>
+          <label class="filter-label"><input type="checkbox" ${f.hasSeizing ? 'checked' : ''}
+            onchange="toggleFilterFlag('hasSeizing', this.checked)" /> Has seizing</label>
+        </div>
+      </div>
+    </div>
+    <div class="filter-custom">
+      <div class="fc-head">
+        <span class="fc-title">Custom conditions <span class="muted-hint">(build your own — all must match)</span></span>
+        <button class="btn btn-sm btn-outline" onclick="addCustomRow()">➕ Add condition</button>
+      </div>
+      <div id="custom-conditions">${renderCustomConditions()}</div>
+    </div>
+    </div>
+  </div>`;
+}
+
+// Collapse / expand the Borrowers filter panel.
+function toggleFilters() {
+  _filtersOpen = !_filtersOpen;
+  const panel = document.getElementById('filter-panel');
+  if (!panel) return;
+  const body = panel.querySelector('.filter-body');
+  const caret = panel.querySelector('.fp-caret');
+  const toggle = panel.querySelector('.fp-toggle');
+  if (body) body.style.display = _filtersOpen ? '' : 'none';
+  if (caret) caret.textContent = _filtersOpen ? '▾' : '▸';
+  if (toggle) toggle.setAttribute('aria-expanded', _filtersOpen);
+  panel.classList.toggle('open', _filtersOpen);
+  panel.classList.toggle('collapsed', !_filtersOpen);
+}
+
+// Sort the Borrowers table by a column; clicking the same column flips order.
+function sortBorrowers(key) {
+  if (_sortKey === key) _sortDir = -_sortDir;
+  else { _sortKey = key; _sortDir = 1; }
   filterBorrowers(searchQuery);
+}
+
+function updateSortCarets() {
+  document.querySelectorAll('th.th-sort').forEach(th => {
+    const c = th.querySelector('.sort-caret');
+    if (!c) return;
+    c.textContent = (th.dataset.sort === _sortKey) ? (_sortDir > 0 ? ' ▲' : ' ▼') : '';
+  });
+}
+
+// HTML for the build-your-own custom-condition rows.
+function renderCustomConditions() {
+  if (!filters.custom.length) {
+    return '<div class="fc-empty">No custom conditions. Click “Add condition” to filter on any field (e.g. Days overdue &gt; 45, Place is exactly Pavagada).</div>';
+  }
+  return filters.custom.map((c, i) => {
+    const meta = CUSTOM_FIELDS.find(m => m.key === c.field) || CUSTOM_FIELDS[0];
+    const fieldSel = CUSTOM_FIELDS.map(m =>
+      `<option value="${m.key}" ${m.key === c.field ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
+    const opSel = (CUSTOM_OPS[meta.type] || CUSTOM_OPS.text).map(o =>
+      `<option value="${o[0]}" ${o[0] === c.op ? 'selected' : ''}>${esc(o[1])}</option>`).join('');
+    let valInput;
+    if (meta.type === 'enum') {
+      const opts = (meta.options || []).map(o =>
+        `<option value="${esc(o)}" ${o === c.value ? 'selected' : ''}>${esc(o)}</option>`).join('');
+      valInput = `<select class="filter-select cc-value" onchange="setCustom(${i}, 'value', this.value)">
+        <option value="">— pick —</option>${opts}</select>`;
+    } else {
+      const ph = meta.type === 'date' ? 'dd-mm-yy' : (meta.type === 'number' ? 'value' : 'text');
+      valInput = `<input type="text" class="form-control cc-value" placeholder="${ph}"
+        value="${esc(c.value)}" oninput="setCustom(${i}, 'value', this.value)" />`;
+    }
+    return `
+      <div class="cc-row">
+        <select class="filter-select cc-field" onchange="changeCustomField(${i}, this.value)">${fieldSel}</select>
+        <select class="filter-select cc-op" onchange="setCustom(${i}, 'op', this.value)">${opSel}</select>
+        ${valInput}
+        <button class="btn btn-sm btn-outline cc-del" title="Remove this condition"
+          onclick="removeCustomRow(${i})">✕</button>
+      </div>`;
+  }).join('');
+}
+
+// True if a single custom condition matches a summary. Empty value = ignored.
+function matchesCustomCondition(s, c) {
+  if (!c || !c.field || c.value === '' || c.value == null) return true;
+  const meta = CUSTOM_FIELDS.find(m => m.key === c.field);
+  if (!meta) return true;
+  if (meta.type === 'number') {
+    const fieldVal = parseFloat(s[c.field]) || 0;
+    const v = parseFloat(c.value);
+    if (isNaN(v)) return true;
+    switch (c.op) {
+      case 'gt':  return fieldVal >  v;
+      case 'gte': return fieldVal >= v;
+      case 'lt':  return fieldVal <  v;
+      case 'lte': return fieldVal <= v;
+      case 'eq':  return Math.round(fieldVal) === Math.round(v);
+      case 'neq': return Math.round(fieldVal) !== Math.round(v);
+      default:    return true;
+    }
+  }
+  if (meta.type === 'date') {
+    const iso = parseUserDate(c.value);
+    if (!iso) return true;                 // not a valid date yet — don't filter
+    const fieldVal = s[c.field] || '';
+    if (!fieldVal) return false;
+    switch (c.op) {
+      case 'on':     return fieldVal === iso;
+      case 'before': return fieldVal <  iso;
+      case 'after':  return fieldVal >  iso;
+      default:       return true;
+    }
+  }
+  if (meta.type === 'enum') {
+    const fieldVal = s.status_label || '';
+    return c.op === 'neq' ? fieldVal !== c.value : fieldVal === c.value;
+  }
+  // text
+  const fieldVal = (s[c.field] || '').toString().toLowerCase();
+  const v = c.value.toString().toLowerCase();
+  switch (c.op) {
+    case 'not_contains': return !fieldVal.includes(v);
+    case 'equals':       return fieldVal === v;
+    default:             return fieldVal.includes(v);
+  }
+}
+
+// ── Filter panel: state handlers ─────────────────────────────────
+function setFilter(key, value) {
+  filters[key] = value;
+  filterBorrowers(searchQuery);
+}
+
+function setFilterDue(value) {
+  filters.due = value;
+  const pick = document.getElementById('filter-pick-date');
+  const within = document.getElementById('filter-due-within');
+  if (pick) pick.style.display = value === 'pick' ? '' : 'none';
+  if (within) within.style.display = value === 'within' ? '' : 'none';
+  filterBorrowers(searchQuery);
+}
+
+// Overdue severity: reveal the custom day/amount thresholds when "Custom…" picked.
+function setFilterOverdue(value) {
+  filters.overdue = value;
+  const box = document.getElementById('overdue-custom');
+  if (box) box.style.display = value === 'custom' ? '' : 'none';
+  filterBorrowers(searchQuery);
+}
+
+function setFilterPickDate(val) {
+  const iso = parseUserDate(val);
+  filters.pickDate = iso || '';
+  if (val && !iso) toast('Invalid date. Use dd-mm-yy.', 'error');
+  filterBorrowers(searchQuery);
+}
+
+function setFilterDate(key, val) {
+  const iso = parseUserDate(val);
+  filters[key] = iso || '';
+  if (val && !iso) toast('Invalid date. Use dd-mm-yy.', 'error');
+  filterBorrowers(searchQuery);
+}
+
+function toggleFilterFlag(key, checked) {
+  filters[key] = !!checked;
+  filterBorrowers(searchQuery);
+}
+
+function addCustomRow() {
+  filters.custom.push({ field: CUSTOM_FIELDS[0].key, op: CUSTOM_OPS.text[0][0], value: '' });
+  refreshCustomConditions();
+  filterBorrowers(searchQuery);
+}
+
+function removeCustomRow(i) {
+  filters.custom.splice(i, 1);
+  refreshCustomConditions();
+  filterBorrowers(searchQuery);
+}
+
+// Changing the field also resets the operator to the first valid one for the
+// new field type (a number op makes no sense on a text field, etc.).
+function changeCustomField(i, fieldKey) {
+  const meta = CUSTOM_FIELDS.find(m => m.key === fieldKey) || CUSTOM_FIELDS[0];
+  filters.custom[i].field = fieldKey;
+  filters.custom[i].op = (CUSTOM_OPS[meta.type] || CUSTOM_OPS.text)[0][0];
+  refreshCustomConditions();   // op list + value input depend on the field type
+  filterBorrowers(searchQuery);
+}
+
+function setCustom(i, prop, value) {
+  if (!filters.custom[i]) return;
+  filters.custom[i][prop] = value;
+  filterBorrowers(searchQuery);
+}
+
+function refreshCustomConditions() {
+  const box = document.getElementById('custom-conditions');
+  if (box) box.innerHTML = renderCustomConditions();
+}
+
+function clearAllFilters() {
+  filters = defaultFilters();
+  renderBorrowers();   // rebuild the whole panel back to defaults
+}
+
+// Show "(n active)" next to the panel title.
+function updateActiveFilterCount() {
+  const el = document.getElementById('fp-active-count');
+  if (!el) return;
+  const n = activeFilterParts().length;
+  el.textContent = n ? `${n} active` : '';
+  el.classList.toggle('on', n > 0);
 }
 
 // ── PDF export of the currently-filtered borrowers list ──────────
@@ -871,21 +1597,28 @@ async function exportBorrowersPDF() {
     return;
   }
   const today = new Date().toISOString().split('T')[0];
-  const filtered = summaries.filter(s => passesBorrowerFilter(s, today, searchQuery));
-  if (filtered.length === 0) {
-    toast('No borrowers match the current filter — nothing to export.', 'error');
+  // If any rows are ticked, export exactly those; otherwise the whole filtered list.
+  const useSel = _selectedIds.size > 0;
+  const targets = useSel
+    ? summaries.filter(s => _selectedIds.has(s.borrower_id))
+    : summaries.filter(s => passesBorrowerFilter(s, today, searchQuery));
+  if (targets.length === 0) {
+    toast('No borrowers to export.', 'error');
     return;
   }
   loading(true);
   let result;
   try {
-    result = await api('get_borrowers_full', filtered.map(s => s.borrower_id));
+    result = await api('get_borrowers_full', targets.map(s => s.borrower_id));
   } finally { loading(false); }
   if (!result || !result.success) {
     toast('Failed to fetch data: ' + (result && result.error || 'unknown'), 'error');
     return;
   }
-  const html = buildBorrowersPdfHtml(result.data, currentFilterLabel(), filtered.length);
+  const label = useSel
+    ? `${targets.length} selected borrower${targets.length !== 1 ? 's' : ''}`
+    : currentFilterLabel();
+  const html = buildBorrowersPdfHtml(result.data, label, targets.length);
   const win = window.open('', '_blank', 'width=1100,height=800');
   if (!win) {
     toast('Pop-up blocked. Allow pop-ups for this app and try again.', 'error');
@@ -988,6 +1721,26 @@ function buildBorrowersPdfHtml(items, filterLabel, count) {
 </body></html>`;
 }
 
+// Print / save a single borrower's full statement (reuses the PDF card).
+async function printBorrowerStatement(borrowerId) {
+  loading(true);
+  let result;
+  try { result = await api('get_borrowers_full', [borrowerId]); }
+  catch (e) { return; }
+  finally { loading(false); }
+  if (!result || !result.success || !result.data || !result.data.length) {
+    toast('Could not build the statement.', 'error');
+    return;
+  }
+  const name = (result.data[0].borrower && result.data[0].borrower.name) || 'Borrower';
+  const html = buildBorrowersPdfHtml(result.data, `Statement — ${name}`, 1);
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (!win) { toast('Pop-up blocked. Allow pop-ups for this app and try again.', 'error'); return; }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
 function borrowerPdfCard(it, sl) {
   const b = it.borrower, s = it.summary;
   const pays = it.payments || [], pens = it.penalties || [], seiz = it.seizings || [];
@@ -1008,7 +1761,7 @@ function borrowerPdfCard(it, sl) {
           <td>${esc(p.receipt_no) || '—'}</td>
           <td>${esc(p.installment_label) || '—'}</td>
           <td class="amt">${money(p.amount)}</td>
-          <td>${p.payment_mode ? `${modeIconFor(p.payment_mode)} ${esc(p.payment_mode)}` : ''}</td>
+          <td>${[p.payment_mode ? `${modeIconFor(p.payment_mode)} ${esc(p.payment_mode)}` : '', p.showroom ? `🏪 ${esc(p.showroom)}` : ''].filter(Boolean).join(' · ')}</td>
           <td>${esc(p.notes) || ''}</td>
         </tr>`).join('')
     : '';
@@ -1106,37 +1859,6 @@ function borrowerPdfCard(it, sl) {
   </div>`;
 }
 
-function setStatusFilter(val) {
-  statusFilter = val;
-  const pickInput = document.getElementById('pick-date-input');
-  const closedLabel = document.getElementById('closed-toggle');
-  const minDays = document.getElementById('custom-min-days');
-  const minAmt = document.getElementById('custom-min-amount');
-  if (pickInput) pickInput.style.display = val === 'pick_date' ? '' : 'none';
-  if (closedLabel) closedLabel.style.display = val === 'all' ? '' : 'none';
-  if (minDays) minDays.style.display = val === 'od_custom' ? '' : 'none';
-  if (minAmt) minAmt.style.display = val === 'od_custom' ? '' : 'none';
-  filterBorrowers(searchQuery);
-}
-
-function setPickDate(val) {
-  // Accept dd-mm-yy from user; internally pickDate is YYYY-MM-DD to compare with next-due dates.
-  const iso = parseUserDate(val);
-  pickDate = iso || '';
-  if (val && !iso) toast('Invalid date. Use dd-mm-yy.', 'error');
-  filterBorrowers(searchQuery);
-}
-
-function setCustomMinDays(val) {
-  customMinDays = Math.max(0, parseInt(val, 10) || 0);
-  filterBorrowers(searchQuery);
-}
-
-function setCustomMinAmount(val) {
-  customMinAmount = Math.max(0, parseFloat(val) || 0);
-  filterBorrowers(searchQuery);
-}
-
 // ── Add / Edit Borrower form ─────────────────────────────────────
 function renderAddBorrower(borrower = null) {
   const isEdit = !!borrower;
@@ -1191,6 +1913,53 @@ function renderAddBorrower(borrower = null) {
           <div class="form-group">
             <label>Alternate Phone</label>
             <input class="form-control" name="phone2" type="tel" maxlength="10" value="${esc(b.phone2)}" placeholder="Optional 2nd number" />
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Loan Terms</div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Loan Date <span class="req">*</span></label>
+            <div class="date-field">
+              <input class="form-control" name="loan_date" type="text" required maxlength="10"
+                placeholder="dd-mm-yy" inputmode="numeric"
+                oninput="validateDateInput(this)"
+                value="${esc(fmtDate(b.loan_date)) || todayDDMMYY()}" />
+              <button type="button" class="date-pick-btn" title="Pick from calendar" onclick="openDatePicker(this)">📅</button>
+            </div>
+            <span class="form-hint">Format: dd-mm-yy (e.g. 19-05-26)</span>
+          </div>
+          <div class="form-group">
+            <label>Principal Amount (₹) <span class="req">*</span></label>
+            <input class="form-control" name="loan_amount" type="number" min="1" required
+              value="${b.loan_amount || ''}" placeholder="e.g. 75000"
+              oninput="recalcInstallment()" />
+          </div>
+          <div class="form-group">
+            <label>Interest Rate (% per year) <span class="req">*</span></label>
+            <input class="form-control" name="interest_rate" type="number" min="0" max="100" step="0.1" required
+              value="${b.interest_rate || 24}" placeholder="e.g. 24"
+              oninput="recalcInstallment()" />
+            <span class="form-hint">Annual rate, prorated by loan months.</span>
+          </div>
+          <div class="form-group">
+            <label>Period (months) <span class="req">*</span></label>
+            <input class="form-control" name="period_months" type="number" min="1" max="240" required
+              value="${b.period_months || 12}" placeholder="e.g. 12"
+              oninput="recalcInstallment()" />
+          </div>
+          <div class="form-group">
+            <label>Total Payable (auto-calculated)</label>
+            <div class="calc-display" id="total-payable-display">₹0</div>
+          </div>
+          <div class="form-group">
+            <label>Monthly Installment (₹) <span class="req">*</span></label>
+            <input class="form-control" name="installment_amount" id="installment-field" type="number" min="1" required
+              value="${b.installment_amount || ''}" placeholder="Auto-filled"
+              oninput="onInstallmentEdited(this)" />
+            <span class="form-hint">Auto-calculated. Override if needed.</span>
           </div>
         </div>
       </div>
@@ -1256,49 +2025,6 @@ function renderAddBorrower(borrower = null) {
       </div>
 
       <div class="form-section">
-        <div class="form-section-title">Loan Terms</div>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Loan Date <span class="req">*</span></label>
-            <input class="form-control" name="loan_date" type="text" required maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric"
-              oninput="validateDateInput(this)"
-              value="${esc(fmtDate(b.loan_date)) || todayDDMMYY()}" />
-            <span class="form-hint">Format: dd-mm-yy (e.g. 19-05-26)</span>
-          </div>
-          <div class="form-group">
-            <label>Principal Amount (₹) <span class="req">*</span></label>
-            <input class="form-control" name="loan_amount" type="number" min="1" required
-              value="${b.loan_amount || ''}" placeholder="e.g. 75000"
-              oninput="recalcInstallment()" />
-          </div>
-          <div class="form-group">
-            <label>Interest Rate (% per year) <span class="req">*</span></label>
-            <input class="form-control" name="interest_rate" type="number" min="0" max="100" step="0.1" required
-              value="${b.interest_rate || 24}" placeholder="e.g. 24"
-              oninput="recalcInstallment()" />
-            <span class="form-hint">Annual rate, prorated by loan months.</span>
-          </div>
-          <div class="form-group">
-            <label>Period (months) <span class="req">*</span></label>
-            <input class="form-control" name="period_months" type="number" min="1" max="240" required
-              value="${b.period_months || 12}" placeholder="e.g. 12"
-              oninput="recalcInstallment()" />
-          </div>
-          <div class="form-group">
-            <label>Total Payable (auto-calculated)</label>
-            <div class="calc-display" id="total-payable-display">₹0</div>
-          </div>
-          <div class="form-group">
-            <label>Monthly Installment (₹) <span class="req">*</span></label>
-            <input class="form-control" name="installment_amount" id="installment-field" type="number" min="1" required
-              value="${b.installment_amount || ''}" placeholder="Auto-filled" />
-            <span class="form-hint">Auto-calculated. Override if needed.</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="form-section">
         <div class="form-section-title">Notes</div>
         <div class="form-group">
           <textarea class="form-control" name="notes" rows="3" placeholder="Any additional notes…">${esc(b.notes)}</textarea>
@@ -1321,12 +2047,25 @@ function renderAddBorrower(borrower = null) {
     </form>
   `;
 
+  // On EDIT, the saved installment may be a deliberate manual override — mark
+  // the field as user-edited BEFORE the first recalc so it isn't overwritten.
+  if (isEdit && b.installment_amount) {
+    const ins = document.getElementById('installment-field');
+    if (ins) ins.dataset.userEdited = '1';
+  }
   recalcInstallment();
   loadSuggestions();
   // Reset and start tracking edits — Cancel will warn if anything's been typed.
   _formDirty = false;
   document.getElementById('borrower-form').addEventListener('input',
     () => { _formDirty = true; }, { once: true });
+}
+
+// Called when the user types in the EMI field: lock it so the auto-calculator
+// (which runs on principal/rate/period changes) stops overwriting their value.
+function onInstallmentEdited(el) {
+  el.dataset.userEdited = '1';
+  _formDirty = true;
 }
 
 function cancelBorrowerForm() {
@@ -1375,15 +2114,21 @@ async function submitBorrower(e, existingId) {
   if (!iso) {
     btn.disabled = false; btn.textContent = existingId ? '💾 Save Changes' : '✅ Create Loan';
     toast('Loan Date is invalid. Use dd-mm-yy (e.g. 19-05-26).', 'error');
+    const ld = form.querySelector('[name=loan_date]');
+    if (ld) { ld.classList.add('input-invalid'); ld.focus(); ld.scrollIntoView({ block: 'center' }); }
     return;
   }
   data.loan_date = iso;
 
   let result;
-  if (existingId) {
-    result = await api('update_borrower', existingId, data);
-  } else {
-    result = await api('add_borrower', data);
+  try {
+    result = existingId
+      ? await api('update_borrower', existingId, data)
+      : await api('add_borrower', data);
+  } catch (e) {
+    // api() already showed an error toast — just un-stick the button.
+    btn.disabled = false; btn.textContent = existingId ? '💾 Save Changes' : '✅ Create Loan';
+    return;
   }
 
   btn.disabled = false; btn.textContent = existingId ? '💾 Save Changes' : '✅ Create Loan';
@@ -1417,7 +2162,7 @@ async function showDetail(borrowerId) {
           <td>${esc(p.receipt_no) || '—'}</td>
           <td>${esc(p.installment_label) || '—'}</td>
           <td><strong>${money(p.amount)}</strong></td>
-          <td>${modePill(p.payment_mode)}</td>
+          <td>${modePill(p.payment_mode)}${p.showroom ? `<span class="sh-pill">🏪 ${esc(p.showroom)}</span>` : ''}</td>
           <td>${esc(p.notes) || '—'}</td>
           <td class="action-cell">
             <button class="btn btn-xs btn-outline" onclick="showEditPayment(${p.id},${b.id})">✏</button>
@@ -1549,9 +2294,13 @@ async function showDetail(borrowerId) {
       <button class="btn btn-sm btn-outline" onclick="showAddPenalty(${b.id})">⚠ Add Penalty (O/D)</button>
       <button class="btn btn-sm btn-outline" onclick="showAddSeizing(${b.id})">🚚 Add Seizing Money</button>
       <button class="btn btn-sm btn-outline" onclick="showPaymentSchedule(${b.id})">📅 Schedule</button>
+      ${b.phone ? `<button class="btn btn-sm btn-outline" title="Send WhatsApp reminder"
+        data-phone="${esc(b.phone)}" data-name="${esc(b.name)}"
+        data-amt="${esc(money(s.is_overdue ? s.overdue_amount : s.installment_amount))}"
+        data-kind="${s.is_overdue ? 'overdue' : 'due'}" onclick="remindFromBtn(this)">💬 Remind</button>` : ''}
+      <button class="btn btn-sm btn-outline" onclick="printBorrowerStatement(${b.id})">🖨 Print</button>
       <button class="btn btn-sm btn-outline" onclick="closeModal(); navigate('add'); loadEditForm(${b.id})">✏ Edit</button>
       ${closedBtn}
-      <button class="btn btn-sm btn-danger" data-bid="${b.id}" data-bname="${esc(b.name)}" onclick="confirmDeleteBorrower(this)">🗑 Delete Borrower</button>
     </div>
 
     <div class="detail-tables">
@@ -1583,6 +2332,11 @@ async function showDetail(borrowerId) {
         </div>
       </div>
     </div>
+
+    <div class="detail-danger">
+      <button class="btn btn-sm btn-danger" data-bid="${b.id}" data-bname="${esc(b.name)}" onclick="confirmDeleteBorrower(this)">🗑 Delete this borrower</button>
+      <span class="detail-danger-hint">Permanently removes this borrower and all their payments, penalties &amp; seizing entries.</span>
+    </div>
   `;
 
   openModal();
@@ -1597,58 +2351,47 @@ function infoRow(key, val, valClass) {
 // ── Add Payment / Penalty modals ─────────────────────────────────
 const MAX_PAYMENTS_AT_ONCE = 60;  // safety cap for the Custom option
 
-function showAddPayment(borrowerId) {
-  let countOpts = '';
-  for (let i = 1; i <= 12; i++) countOpts += `<option value="${i}">${i}</option>`;
-  countOpts += `<option value="custom">Custom…</option>`;
-
+async function showAddPayment(borrowerId) {
+  // Single payment by default — the common case. "Add another payment" appends
+  // more blocks for the occasional bulk back-entry (capped for safety).
+  await ensureShowroomOpts();   // for the showroom datalist in each block
   document.getElementById('modal-inner').innerHTML = `
     <div class="mini-modal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <h3>Add Payment</h3>
         <button class="modal-close" onclick="showDetail(${borrowerId})">✕</button>
       </div>
-      <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:14px;flex-wrap:wrap">
-        <div class="form-group" style="margin:0;max-width:240px">
-          <label>How many payments to add at once?</label>
-          <select class="form-control" id="pay-count-select" onchange="onPaymentCountChange(this.value)">
-            ${countOpts}
-          </select>
-        </div>
-        <div class="form-group" id="pay-custom-wrap" style="margin:0;max-width:170px;display:none">
-          <label>Enter number (max ${MAX_PAYMENTS_AT_ONCE})</label>
-          <input class="form-control" id="pay-custom-count" type="number" min="1" max="${MAX_PAYMENTS_AT_ONCE}"
-            placeholder="e.g. 18" oninput="onCustomCountChange(this.value)" />
-        </div>
-      </div>
       <form onsubmit="submitPaymentBatch(event, ${borrowerId})">
         <div class="pay-blocks-wrap" id="pay-blocks-wrap"></div>
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:4px"
+          onclick="addPaymentBlock()">➕ Add another payment</button>
         <div style="display:flex;gap:10px;margin-top:16px">
-          <button type="submit" class="btn btn-primary">Save All Payments</button>
+          <button type="submit" class="btn btn-primary">Save</button>
           <button type="button" class="btn btn-outline" onclick="showDetail(${borrowerId})">Cancel</button>
         </div>
       </form>
+      ${showroomDatalistHtml('dl-pay-showroom')}
     </div>`;
   buildPaymentBlocks(1);
+  openModal();
 }
 
-function onPaymentCountChange(val) {
-  const customWrap = document.getElementById('pay-custom-wrap');
-  if (val === 'custom') {
-    customWrap.style.display = '';
-    const c = parseInt(document.getElementById('pay-custom-count').value, 10);
-    buildPaymentBlocks(c > 0 ? c : 1);
-  } else {
-    customWrap.style.display = 'none';
-    buildPaymentBlocks(parseInt(val, 10) || 1);
+// Append one more payment block (up to the safety cap), keeping typed values.
+function addPaymentBlock() {
+  const n = document.querySelectorAll('#pay-blocks-wrap .pay-block').length;
+  if (n >= MAX_PAYMENTS_AT_ONCE) {
+    toast(`You can add up to ${MAX_PAYMENTS_AT_ONCE} payments at once.`, 'info');
+    return;
   }
+  buildPaymentBlocks(n + 1);
 }
 
-function onCustomCountChange(val) {
-  let n = parseInt(val, 10) || 1;
-  if (n < 1) n = 1;
-  if (n > MAX_PAYMENTS_AT_ONCE) n = MAX_PAYMENTS_AT_ONCE;
-  buildPaymentBlocks(n);
+// Remove one payment block by index, keeping the rest of the typed values.
+function removePaymentBlock(i) {
+  const rows = _readPaymentBlocks();
+  if (rows.length <= 1) return;
+  rows.splice(i, 1);
+  buildPaymentBlocks(rows.length, rows);
 }
 
 // Read whatever is currently typed in the payment blocks (preserved across rebuilds).
@@ -1664,14 +2407,15 @@ function _readPaymentBlocks() {
       installment_label: get('.pb-label'),
       notes: get('.pb-notes'),
       payment_mode: modeRadio ? modeRadio.value : '',   // empty if user didn't pick
+      showroom: get('.pb-showroom'),
     });
   });
   return out;
 }
 
-function buildPaymentBlocks(count) {
+function buildPaymentBlocks(count, preset) {
   count = Math.max(1, Math.min(MAX_PAYMENTS_AT_ONCE, count || 1));
-  const existing = _readPaymentBlocks();   // keep anything already typed
+  const existing = preset || _readPaymentBlocks();   // keep anything already typed
   const today = todayDDMMYY();
   let html = '';
   for (let i = 1; i <= count; i++) {
@@ -1682,15 +2426,21 @@ function buildPaymentBlocks(count) {
     const l = prev ? prev.installment_label : '';
     const n = prev ? prev.notes : '';
     const mode = prev ? (prev.payment_mode || '') : '';   // new blocks start unselected
+    const sh = prev ? (prev.showroom || '') : '';
     html += `
       <div class="pay-block">
-        <div class="pay-block-title">Payment ${i}</div>
+        <div class="pay-block-title">Payment ${i}
+          ${count > 1 ? `<button type="button" class="pay-block-del" title="Remove this payment" onclick="removePaymentBlock(${i - 1})">✕</button>` : ''}
+        </div>
         <div class="form-grid">
           <div class="form-group">
             <label>Payment Date <span class="req">*</span></label>
-            <input class="form-control pb-date" type="text" maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric"
-              oninput="validateDateInput(this)" value="${esc(d)}" />
+            <div class="date-field">
+              <input class="form-control pb-date" type="text" maxlength="10"
+                placeholder="dd-mm-yy" inputmode="numeric"
+                oninput="validateDateInput(this)" value="${esc(d)}" />
+              <button type="button" class="date-pick-btn" title="Pick from calendar" onclick="openDatePicker(this)">📅</button>
+            </div>
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -1705,8 +2455,12 @@ function buildPaymentBlocks(count) {
             <input class="form-control pb-label" placeholder="e.g. 1st, 2nd" value="${esc(l)}" />
           </div>
           <div class="form-group form-full">
-            <label>Payment Mode</label>
-            ${modeChips(`pay-mode-${i}`, mode)}
+            <label>Payment Mode &amp; Showroom</label>
+            <div class="mode-showroom-row">
+              ${modeChips(`pay-mode-${i}`, mode)}
+              <input class="form-control pb-showroom" list="dl-pay-showroom"
+                placeholder="Showroom (optional)" value="${esc(sh)}" autocomplete="off" />
+            </div>
           </div>
           <div class="form-group form-full">
             <label>Notes</label>
@@ -1735,6 +2489,7 @@ async function submitPaymentBatch(e, borrowerId) {
       installment_label: row.installment_label,
       notes: row.notes,
       payment_mode: row.payment_mode || '',
+      showroom: row.showroom || '',
     });
   }
   const r = await api('add_payments_batch', borrowerId, payments);
@@ -1759,9 +2514,12 @@ function showAddPenalty(borrowerId) {
         <div class="form-grid" style="margin-bottom:16px">
           <div class="form-group">
             <label>Charge Date <span class="req">*</span></label>
-            <input class="form-control" name="charge_date" type="text" required maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric"
-              oninput="validateDateInput(this)" value="${today}" />
+            <div class="date-field">
+              <input class="form-control" name="charge_date" type="text" required maxlength="10"
+                placeholder="dd-mm-yy" inputmode="numeric"
+                oninput="validateDateInput(this)" value="${today}" />
+              <button type="button" class="date-pick-btn" title="Pick from calendar" onclick="openDatePicker(this)">📅</button>
+            </div>
           </div>
           <div class="form-group">
             <label>Receipt No</label>
@@ -1798,33 +2556,71 @@ async function submitPenalty(e, borrowerId) {
 }
 
 // ── Delete payment / penalty ─────────────────────────────────────
+// Fetch one sub-record (payment/penalty/seizing) so a delete can offer Undo.
+async function _grabRecord(borrowerId, kind, id) {
+  try {
+    const d = await api('get_borrower_detail', borrowerId);
+    return ((d && d[kind]) || []).find(x => x.id === id) || null;
+  } catch (_) { return null; }
+}
+
 function deletePayment(paymentId, borrowerId) {
   requirePasswordThen(
-    'This will delete this payment. It cannot be undone.',
-    'Delete this payment? This cannot be undone.',
-    async () => {
-      const r = await api('delete_payment', paymentId);
-      if (r.success) { _viewDirty = true; toast('Payment deleted.', 'success'); showDetail(borrowerId); }
-      else toast('Error: ' + r.error, 'error');
+    'This will delete this payment.',
+    'Delete this payment?',
+    async (pwd) => {
+      const rec = await _grabRecord(borrowerId, 'payments', paymentId);
+      const r = await api('delete_payment', paymentId, pwd || '');
+      if (r.success) {
+        _viewDirty = true; showDetail(borrowerId);
+        toast('Payment deleted.', 'success', rec ? { label: 'Undo', onClick: () => undoPayment(borrowerId, rec) } : null);
+      } else toast('Error: ' + r.error, 'error');
     });
+}
+
+function undoPayment(borrowerId, rec) {
+  api('add_payment', {
+    borrower_id: borrowerId, payment_date: rec.payment_date, amount: rec.amount,
+    receipt_no: rec.receipt_no || '', installment_label: rec.installment_label || '',
+    notes: rec.notes || '', payment_mode: rec.payment_mode || '', showroom: rec.showroom || '',
+  }).then(r => {
+    if (r && r.success) { _viewDirty = true; toast('Payment restored.', 'success'); showDetail(borrowerId); }
+    else toast('Could not undo: ' + (r && r.error || 'unknown'), 'error');
+  }).catch(() => {});
 }
 
 function deletePenalty(penaltyId, borrowerId) {
   requirePasswordThen(
-    'This will delete this penalty entry. It cannot be undone.',
-    'Delete this penalty? This cannot be undone.',
-    async () => {
-      const r = await api('delete_penalty', penaltyId);
-      if (r.success) { _viewDirty = true; toast('Penalty deleted.', 'success'); showDetail(borrowerId); }
-      else toast('Error: ' + r.error, 'error');
+    'This will delete this penalty entry.',
+    'Delete this penalty?',
+    async (pwd) => {
+      const rec = await _grabRecord(borrowerId, 'penalties', penaltyId);
+      const r = await api('delete_penalty', penaltyId, pwd || '');
+      if (r.success) {
+        _viewDirty = true; showDetail(borrowerId);
+        toast('Penalty deleted.', 'success', rec ? { label: 'Undo', onClick: () => undoPenalty(borrowerId, rec) } : null);
+      } else toast('Error: ' + r.error, 'error');
     });
+}
+
+function undoPenalty(borrowerId, rec) {
+  api('add_penalty', {
+    borrower_id: borrowerId, charge_date: rec.charge_date, amount: rec.amount,
+    receipt_no: rec.receipt_no || '', notes: rec.notes || '',
+  }).then(r => {
+    if (r && r.success) { _viewDirty = true; toast('Penalty restored.', 'success'); showDetail(borrowerId); }
+    else toast('Could not undo: ' + (r && r.error || 'unknown'), 'error');
+  }).catch(() => {});
 }
 
 // ── Edit payment / penalty ───────────────────────────────────────
 async function showEditPayment(paymentId, borrowerId) {
-  const detail = await api('get_borrower_detail', borrowerId);
+  let detail;
+  try { detail = await api('get_borrower_detail', borrowerId); } catch (e) { return; }
+  if (!detail || !detail.payments) return;
   const p = detail.payments.find(x => x.id === paymentId);
   if (!p) return;
+  await ensureShowroomOpts();
   document.getElementById('modal-inner').innerHTML = `
     <div class="mini-modal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -1852,8 +2648,12 @@ async function showEditPayment(paymentId, borrowerId) {
             <input class="form-control" name="installment_label" value="${esc(p.installment_label || '')}" />
           </div>
           <div class="form-group form-full">
-            <label>Payment Mode</label>
-            ${modeChips('payment_mode', p.payment_mode || '')}
+            <label>Payment Mode &amp; Showroom</label>
+            <div class="mode-showroom-row">
+              ${modeChips('payment_mode', p.payment_mode || '')}
+              <input class="form-control" name="showroom" list="dl-pay-showroom"
+                placeholder="Showroom (optional)" value="${esc(p.showroom || '')}" autocomplete="off" />
+            </div>
           </div>
           <div class="form-group form-full">
             <label>Notes</label>
@@ -1865,7 +2665,9 @@ async function showEditPayment(paymentId, borrowerId) {
           <button type="button" class="btn btn-outline" onclick="showDetail(${borrowerId})">Cancel</button>
         </div>
       </form>
+      ${showroomDatalistHtml('dl-pay-showroom')}
     </div>`;
+  openModal();
 }
 
 async function submitEditPayment(e, paymentId, borrowerId) {
@@ -1882,7 +2684,9 @@ async function submitEditPayment(e, paymentId, borrowerId) {
 }
 
 async function showEditPenalty(penaltyId, borrowerId) {
-  const detail = await api('get_borrower_detail', borrowerId);
+  let detail;
+  try { detail = await api('get_borrower_detail', borrowerId); } catch (e) { return; }
+  if (!detail || !detail.penalties) return;
   const p = detail.penalties.find(x => x.id === penaltyId);
   if (!p) return;
   document.getElementById('modal-inner').innerHTML = `
@@ -1918,6 +2722,7 @@ async function showEditPenalty(penaltyId, borrowerId) {
         </div>
       </form>
     </div>`;
+  openModal();
 }
 
 async function submitEditPenalty(e, penaltyId, borrowerId) {
@@ -1945,9 +2750,12 @@ function showAddSeizing(borrowerId) {
         <div class="form-grid" style="margin-bottom:16px">
           <div class="form-group">
             <label>Date <span class="req">*</span></label>
-            <input class="form-control" name="seizing_date" type="text" required maxlength="10"
-              placeholder="dd-mm-yy" inputmode="numeric"
-              oninput="validateDateInput(this)" value="${today}" />
+            <div class="date-field">
+              <input class="form-control" name="seizing_date" type="text" required maxlength="10"
+                placeholder="dd-mm-yy" inputmode="numeric"
+                oninput="validateDateInput(this)" value="${today}" />
+              <button type="button" class="date-pick-btn" title="Pick from calendar" onclick="openDatePicker(this)">📅</button>
+            </div>
           </div>
           <div class="form-group">
             <label>Amount (₹) <span class="req">*</span></label>
@@ -1981,17 +2789,32 @@ async function submitSeizing(e, borrowerId) {
 
 function deleteSeizing(seizingId, borrowerId) {
   requirePasswordThen(
-    'This will delete this seizing money entry. It cannot be undone.',
-    'Delete this seizing money entry? This cannot be undone.',
-    async () => {
-      const r = await api('delete_seizing', seizingId);
-      if (r.success) { _viewDirty = true; toast('Seizing entry deleted.', 'success'); showDetail(borrowerId); }
-      else toast('Error: ' + r.error, 'error');
+    'This will delete this seizing money entry.',
+    'Delete this seizing money entry?',
+    async (pwd) => {
+      const rec = await _grabRecord(borrowerId, 'seizings', seizingId);
+      const r = await api('delete_seizing', seizingId, pwd || '');
+      if (r.success) {
+        _viewDirty = true; showDetail(borrowerId);
+        toast('Seizing entry deleted.', 'success', rec ? { label: 'Undo', onClick: () => undoSeizing(borrowerId, rec) } : null);
+      } else toast('Error: ' + r.error, 'error');
     });
 }
 
+function undoSeizing(borrowerId, rec) {
+  api('add_seizing', {
+    borrower_id: borrowerId, seizing_date: rec.seizing_date, amount: rec.amount,
+    reason: rec.reason || '',
+  }).then(r => {
+    if (r && r.success) { _viewDirty = true; toast('Seizing entry restored.', 'success'); showDetail(borrowerId); }
+    else toast('Could not undo: ' + (r && r.error || 'unknown'), 'error');
+  }).catch(() => {});
+}
+
 async function showEditSeizing(seizingId, borrowerId) {
-  const detail = await api('get_borrower_detail', borrowerId);
+  let detail;
+  try { detail = await api('get_borrower_detail', borrowerId); } catch (e) { return; }
+  if (!detail) return;
   const p = (detail.seizings || []).find(x => x.id === seizingId);
   if (!p) return;
   document.getElementById('modal-inner').innerHTML = `
@@ -2023,6 +2846,7 @@ async function showEditSeizing(seizingId, borrowerId) {
         </div>
       </form>
     </div>`;
+  openModal();
 }
 
 async function submitEditSeizing(e, seizingId, borrowerId) {
@@ -2065,8 +2889,8 @@ function confirmDeleteBorrower(btn) {
   requirePasswordThen(
     `This will delete borrower "${name}" and ALL their payments / penalties / seizings. It cannot be undone.`,
     `Final confirmation: delete "${name}" now?`,
-    async () => {
-      const r = await api('delete_borrower', borrowerId);
+    async (pwd) => {
+      const r = await api('delete_borrower', borrowerId, pwd || '');
       if (r.success) {
         _viewDirty = true;
         toast(`${name} deleted permanently.`, 'success');
@@ -2129,6 +2953,40 @@ async function renderPortfolio() {
     ? Math.min(100, Math.round((p.total_collected / p.total_payable) * 100))
     : 0;
 
+  // Cache the payload so the month selector can re-render without refetching.
+  window._portfolioData = p;
+  window._selMonth = (p.this_month || {}).month || '';
+  const nowLabel = (p.this_month || {}).label || '';
+
+  // ── Interest earned vs expected ──
+  const intExp = p.total_interest_expected || 0;
+  const intEarned = p.total_interest_earned || 0;
+  const intPct = intExp > 0 ? Math.min(100, Math.round((intEarned / intExp) * 100)) : 0;
+
+  // ── 6-month collection trend (bars scaled to the biggest month) ──
+  const monthly = p.monthly || [];
+  const maxC = Math.max(1, ...monthly.map(m => m.collected || 0));
+  const trendBars = monthly.map(m => {
+    const w = Math.round(((m.collected || 0) / maxC) * 100);
+    const isNow = m.label === nowLabel;
+    return `
+      <div class="mtrend-row">
+        <div class="mtrend-label">${esc(m.label)}${isNow ? ' •' : ''}</div>
+        <div class="mtrend-bar-wrap"><div class="mtrend-bar${isNow ? ' now' : ''}" style="width:${w}%"></div></div>
+        <div class="mtrend-val">${money(m.collected || 0)}<span class="mtrend-int">int ${money(m.interest || 0)}</span></div>
+      </div>`;
+  }).join('');
+
+  // ── Collections by showroom (all-time) ──
+  const shRows = (p.by_showroom || []).map(r => `
+    <tr>
+      <td><strong>${esc(r.showroom)}</strong></td>
+      <td>${r.loans}</td>
+      <td>${money(r.principal)}</td>
+      <td>${money(r.collected)}</td>
+      <td>${r.outstanding > 0 ? money(r.outstanding) : '—'}</td>
+    </tr>`).join('') || '<tr class="no-data"><td colspan="5">No showroom data yet.</td></tr>';
+
   document.getElementById('view').innerHTML = `
     <div class="page-header">
       <div>
@@ -2173,40 +3031,138 @@ async function renderPortfolio() {
       </div>
     </div>
 
-    <div class="card" style="margin-top:24px">
-      <div class="card-header">
-        <span class="card-title">Penalties Collected (O/D)</span>
-      </div>
-      <div style="padding:20px 24px;display:flex;align-items:center;gap:24px">
-        <div style="font-size:28px;font-weight:700;color:var(--warning)">${money(p.total_penalties)}</div>
-        <div style="font-size:13px;color:var(--text-muted)">Total O/D penalty charges collected across all borrowers</div>
+    <div id="month-section">${renderMonthSection(p.this_month)}</div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header"><span class="card-title">Last 6 Months — Collection Trend</span></div>
+      <div style="padding:18px 24px">
+        ${trendBars || '<div style="color:var(--text-muted);font-size:13px">No collection data.</div>'}
       </div>
     </div>
 
     <div class="card" style="margin-top:16px">
-      <div class="card-header">
-        <span class="card-title">Seizing Money Spent (O/D)</span>
-      </div>
-      <div style="padding:20px 24px;display:flex;align-items:center;gap:24px">
-        <div style="font-size:28px;font-weight:700;color:var(--warning)">${money(p.total_seizings || 0)}</div>
-        <div style="font-size:13px;color:var(--text-muted)">Total seizing money (towing / recovery / garage) across all borrowers</div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:16px">
-      <div class="card-header"><span class="card-title">Collection Progress</span></div>
+      <div class="card-header"><span class="card-title">Interest — Earned vs Expected</span></div>
       <div style="padding:20px 24px">
         <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text-muted);margin-bottom:8px">
-          <span>Collected: ${money(p.total_collected)}</span>
-          <span>${collectedPct}%</span>
-          <span>Total Payable: ${money(p.total_payable)}</span>
+          <span>Earned so far: <strong style="color:var(--success)">${money(intEarned)}</strong></span>
+          <span>${intPct}%</span>
+          <span>Total expected: <strong>${money(intExp)}</strong></span>
         </div>
         <div style="height:14px;background:var(--border);border-radius:999px;overflow:hidden">
-          <div style="height:100%;width:${collectedPct}%;background:var(--primary);border-radius:999px;transition:width 0.5s"></div>
+          <div style="height:100%;width:${intPct}%;background:var(--success);border-radius:999px;transition:width 0.5s"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:8px">Interest is the profit baked into each loan (total payable − principal). "Earned" is the share already collected.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header"><span class="card-title">Collections by Showroom (all-time)</span></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Showroom</th><th>Loans</th><th>Principal Lent</th>
+              <th>Collected (all-time)</th><th>Outstanding</th>
+            </tr>
+          </thead>
+          <tbody>${shRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:24px">
+      <div class="card-header"><span class="card-title">Penalties &amp; Recovery Costs (O/D)</span></div>
+      <div class="recovery-grid">
+        <div class="recovery-item">
+          <div class="recovery-val">${money(p.total_penalties)}</div>
+          <div class="recovery-label">Penalties collected — O/D charges across all borrowers</div>
+        </div>
+        <div class="recovery-item">
+          <div class="recovery-val">${money(p.total_seizings || 0)}</div>
+          <div class="recovery-label">Seizing money spent — towing / recovery / garage</div>
         </div>
       </div>
     </div>
   `;
+}
+
+// The month-selectable "Earnings" block. `m` is a month-breakdown object
+// (shape of get_portfolio_summary()['this_month'] / get_month_summary()).
+function renderMonthSection(m) {
+  m = m || {};
+  const p = window._portfolioData || {};
+  const sel = window._selMonth || m.month || '';
+  const months = (p.available_months && p.available_months.length)
+    ? p.available_months
+    : [{ month: m.month, label: m.label }];
+  const opts = months.map(o =>
+    `<option value="${esc(o.month)}" ${o.month === sel ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+
+  const byModeStr = (m.by_mode && m.by_mode.length)
+    ? m.by_mode.map(x => `${esc(x.mode)}: <strong>${money(x.amount)}</strong>`).join('&nbsp;&nbsp;·&nbsp;&nbsp;')
+    : 'No payments in this month';
+
+  const shList = (m.by_showroom && m.by_showroom.length)
+    ? m.by_showroom.map(x => `
+        <div class="msh-row">
+          <span class="msh-name">${esc(x.showroom)}</span>
+          <span class="msh-amt">${money(x.amount)}</span>
+        </div>`).join('')
+    : '<div class="fc-empty">No collection from any showroom in this month.</div>';
+
+  return `
+    <div class="section-heading month-heading">
+      <span>Earnings for</span>
+      <select class="filter-select" id="month-select" onchange="selectPortfolioMonth(this.value)">${opts}</select>
+    </div>
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px">
+      <div class="stat-card success">
+        <div class="stat-label">Collected</div>
+        <div class="stat-value success" style="font-size:22px">${money(m.collected || 0)}</div>
+        <div class="stat-sub">${m.payments_count || 0} payment(s)</div>
+      </div>
+      <div class="stat-card success">
+        <div class="stat-label">Interest Earned</div>
+        <div class="stat-value success" style="font-size:22px">${money(m.interest || 0)}</div>
+        <div class="stat-sub">Interest portion of the collection</div>
+      </div>
+      <div class="stat-card gray">
+        <div class="stat-label">Principal Returned</div>
+        <div class="stat-value" style="font-size:22px">${money(m.principal || 0)}</div>
+        <div class="stat-sub">Capital recovered</div>
+      </div>
+      <div class="stat-card ${(m.penalties || m.seizings) ? 'primary' : 'gray'}">
+        <div class="stat-label">Penalty / Seizing</div>
+        <div class="stat-value" style="font-size:22px">${money(m.penalties || 0)} <span style="font-size:13px;color:var(--text-muted)">/ ${money(m.seizings || 0)}</span></div>
+        <div class="stat-sub">Penalties collected / seizing spent</div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:8px">
+      <div style="padding:12px 20px;font-size:13px;color:var(--text-muted)">
+        <strong style="color:var(--text)">By payment mode:</strong>&nbsp;&nbsp;${byModeStr}
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:24px">
+      <div class="card-header"><span class="card-title">Collected by Showroom — ${esc(m.label || '')}</span></div>
+      <div class="msh-list">${shList}</div>
+    </div>`;
+}
+
+async function selectPortfolioMonth(ym) {
+  window._selMonth = ym;
+  const slot = document.getElementById('month-section');
+  if (!slot) return;
+  let m;
+  // The current month is already in the cached payload — no need to refetch it.
+  const p = window._portfolioData || {};
+  if (p.this_month && p.this_month.month === ym) {
+    m = p.this_month;
+  } else {
+    loading(true);
+    try { m = await api('get_month_summary', ym); }
+    finally { loading(false); }
+  }
+  slot.innerHTML = renderMonthSection(m);
 }
 
 // ── Payment Schedule modal ───────────────────────────────────────
@@ -2220,6 +3176,7 @@ async function showPaymentSchedule(borrowerId) {
     ]);
   } finally { loading(false); }
   if (!detail) return;
+  if (!Array.isArray(schedule)) schedule = [];
 
   const { borrower: b, summary: s } = detail;
 
@@ -2279,6 +3236,7 @@ async function showPaymentSchedule(borrowerId) {
 // ── Bootstrap ────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
   refreshHasPassword();   // load password state so delete prompts know whether to ask
+  loadAppSettings();      // text size + business name
   navigate('dashboard');
 });
 
@@ -2312,3 +3270,7 @@ function _heartbeat() {
 }
 _heartbeat();
 setInterval(_heartbeat, 5000);
+// Ping immediately when the window is shown again (returning from minimized /
+// another app), so a throttled background tab doesn't get killed on resume.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) _heartbeat(); });
+window.addEventListener('pageshow', _heartbeat);

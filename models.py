@@ -36,6 +36,11 @@ class LoanSummary:
     name: str
     phone: str
     vehicle_no: str
+    father_name: str
+    guarantor_name: str
+    address: str
+    showroom: str
+    vehicle_type: str
     loan_date: date
     loan_amount: float
     interest_rate: float
@@ -88,7 +93,14 @@ def compute_summary(borrower_row, today: date | None = None,
         today = date.today()
 
     b = borrower_row
-    loan_date = parse_date(b["loan_date"])
+    # Resilient against a malformed stored date (e.g. a legacy "2026-02-31"):
+    # one bad row must never crash the whole borrowers list. Degrade to today
+    # (so nothing shows overdue) — the row stays visible and editable so the
+    # user can correct it.
+    try:
+        loan_date = parse_date(b["loan_date"])
+    except (ValueError, TypeError):
+        loan_date = today
     loan_amount = float(b["loan_amount"])
     interest_rate = float(b["interest_rate"])
     period = int(b["period_months"])
@@ -109,7 +121,12 @@ def compute_summary(borrower_row, today: date | None = None,
     remaining = max(0.0, total_payable - total_paid)
 
     elapsed = months_elapsed(loan_date, today)
-    expected_installments = min(elapsed, period)
+    # Expected installments = number of installment due-dates (same day-of-month,
+    # clamped to month end) that have arrived by today. This uses the SAME
+    # schedule as payment_schedule() and the days-overdue loop below, so the
+    # overdue figure, the schedule view, and days_overdue never disagree — even
+    # for loans dated on the 29th/30th/31st.
+    expected_installments = _installments_due_by(loan_date, period, today)
     expected_paid_by_today = min(expected_installments * installment, total_payable)
     overdue_amount = expected_paid_by_today - total_paid
 
@@ -122,15 +139,28 @@ def compute_summary(borrower_row, today: date | None = None,
                 days_overdue = max(0, (today - first_missed).days)
                 break
 
-    # Rounding tolerance: Math.round() can drift by up to 0.5 per installment
-    rounding_tol = period * 0.5 + 1
-    closed = bool(b["closed"]) or total_paid >= total_payable - rounding_tol
+    # Auto-close when the balance is settled within a small FIXED rupee
+    # tolerance (covers per-installment rounding). A period-scaled tolerance
+    # would hide real balances on long loans. A loan the user deliberately
+    # re-opened (reopened flag) is never auto-closed again.
+    rounding_tol = 2.0
+    try:
+        reopened = bool(b["reopened"])
+    except (IndexError, KeyError):
+        reopened = False
+    auto_paid = total_paid >= total_payable - rounding_tol
+    closed = bool(b["closed"]) or (auto_paid and not reopened)
 
     return LoanSummary(
         borrower_id=b["id"],
         name=b["name"] or "",
         phone=b["phone"] or "",
         vehicle_no=b["vehicle_no"] or "",
+        father_name=b["father_name"] or "",
+        guarantor_name=b["guarantor_name"] or "",
+        address=b["address"] or "",
+        showroom=b["showroom"] or "",
+        vehicle_type=b["vehicle_type"] or "",
         loan_date=loan_date,
         loan_amount=loan_amount,
         interest_rate=interest_rate,
@@ -161,6 +191,20 @@ def _add_months(d: date, n: int) -> date:
     month = month % 12 + 1
     day = min(d.day, monthrange(year, month)[1])
     return date(year, month, day)
+
+
+def _installments_due_by(loan_date: date, period: int, today: date) -> int:
+    """Count installments whose due date (same day-of-month, clamped to month
+    end) is on or before `today`. Due dates are monotonic, so we can stop at the
+    first one still in the future. Shared by compute_summary and the overdue
+    logic so every screen agrees on how many installments are due."""
+    n = 0
+    for i in range(1, max(0, period) + 1):
+        if _add_months(loan_date, i) <= today:
+            n += 1
+        else:
+            break
+    return n
 
 
 def all_summaries(today: date | None = None) -> list[LoanSummary]:
@@ -202,7 +246,10 @@ def payment_schedule(borrower_row, today: date | None = None) -> list[dict]:
     """Full installment schedule — each installment with paid/overdue/upcoming status."""
     if today is None:
         today = date.today()
-    loan_date = parse_date(borrower_row["loan_date"])
+    try:
+        loan_date = parse_date(borrower_row["loan_date"])
+    except (ValueError, TypeError):
+        loan_date = today
     period = int(borrower_row["period_months"])
     installment = float(borrower_row["installment_amount"])
     total_paid = db.sum_payments(borrower_row["id"])

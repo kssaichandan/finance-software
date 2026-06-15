@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 # Updated by every request and every heartbeat. If no activity for
 # IDLE_TIMEOUT seconds (browser window closed), the process exits.
 LAST_ACTIVITY = time.time()
-IDLE_TIMEOUT = 20.0  # seconds
+IDLE_TIMEOUT = 30.0  # seconds (heartbeat is every 5s; tolerate brief stalls)
 
 # Fresh per-process random token. Embedded into index.html when served, and
 # required on every API/heartbeat request. Protects against CSRF and against
@@ -46,6 +46,20 @@ def _log_dir() -> str:
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def _log_exception() -> None:
+    """Append the current traceback to error.log next to the app (best-effort).
+    Written with utf-8 so non-ASCII (e.g. Indic names in a message) can't make
+    the logging itself fail."""
+    try:
+        log_path = os.path.join(_log_dir(), "error.log")
+        with open(log_path, "a", encoding="utf-8", errors="replace") as f:
+            f.write("\n" + "=" * 60 + "\n")
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+            traceback.print_exc(file=f)
+    except Exception:
+        pass
 
 
 def _free_port() -> int:
@@ -124,7 +138,11 @@ def build_handler(api):
             # BEFORE _touch() so an unauthenticated request cannot keep the
             # server alive indefinitely.
             sent = self.headers.get("X-Session-Token", "")
-            if not secrets.compare_digest(sent, SESSION_TOKEN):
+            try:
+                ok = secrets.compare_digest(sent, SESSION_TOKEN)
+            except TypeError:
+                ok = False  # non-ASCII header → fail closed, never crash
+            if not ok:
                 self._send(403, "Forbidden")
                 return
             _touch()
@@ -147,12 +165,23 @@ def build_handler(api):
                 if not isinstance(args, list):
                     args = [args]
                 result = method(*args)
-                self._send(200, json.dumps(result, default=str),
-                           "application/json; charset=utf-8")
+                try:
+                    body = json.dumps(result, default=str, allow_nan=False)
+                except ValueError:
+                    # NaN/Infinity slipped into the result — refuse to emit
+                    # invalid JSON (which would break the whole page).
+                    self._send(400, json.dumps(
+                        {"error": "The result contained invalid numbers."}),
+                        "application/json; charset=utf-8")
+                    return
+                self._send(200, body, "application/json; charset=utf-8")
             except Exception:
-                tb = traceback.format_exc()
-                self._send(500, json.dumps({"error": tb}),
-                           "application/json; charset=utf-8")
+                # Log full detail locally; return only a generic message so we
+                # never leak file paths / stack traces to the client or the UI.
+                _log_exception()
+                self._send(500, json.dumps(
+                    {"error": "Something went wrong on the server. See error.log."}),
+                    "application/json; charset=utf-8")
 
     return Handler
 
@@ -178,7 +207,24 @@ def main():
     import db
     from api import API
 
-    db.init_db()
+    try:
+        db.init_db()
+    except Exception:
+        _log_exception()
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Finance Tracker could not open its data file (finance.db).\n\n"
+                "It may be open in another copy of the app, on a synced folder "
+                "(OneDrive / Google Drive), read-only, or damaged.\n\n"
+                "Close any other copies, move the folder off OneDrive, and try again.",
+                "Finance Tracker - Data file error",
+                0x10,
+            )
+        except Exception:
+            pass
+        sys.exit(1)
     api = API()
 
     port = _free_port()
@@ -194,9 +240,20 @@ def main():
     # Grace period at startup so the page has time to load and start pinging.
     _touch()  # reset clock at startup
     grace_until = time.time() + 15.0
+    last_tick = time.monotonic()
     try:
         while True:
             time.sleep(3)
+            now_mono = time.monotonic()
+            # If far more than our 3s nap elapsed, the machine was suspended
+            # (laptop sleep). Don't count that gap as idle — treat the resume as
+            # fresh activity so we don't kill a window the user still has open.
+            if now_mono - last_tick > 30:
+                last_tick = now_mono
+                _touch()
+                grace_until = time.time() + 5.0
+                continue
+            last_tick = now_mono
             now = time.time()
             if now < grace_until:
                 continue
@@ -212,7 +269,7 @@ if __name__ == "__main__":
         main()
     except Exception:
         log_path = os.path.join(_log_dir(), "error.log")
-        with open(log_path, "w") as f:
+        with open(log_path, "w", encoding="utf-8", errors="replace") as f:
             traceback.print_exc(file=f)
         try:
             import ctypes

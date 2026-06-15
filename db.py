@@ -23,10 +23,11 @@ _BORROWER_COLS = frozenset({
     "vehicle_type", "vehicle_no", "engine_no", "chassis_no", "key_no", "serial_no",
     "book_ref", "showroom",
     "loan_amount", "interest_rate", "period_months", "installment_amount",
-    "loan_date", "notes", "closed",
+    "loan_date", "notes", "closed", "reopened",
 })
 _PAYMENT_COLS = frozenset({
-    "payment_date", "receipt_no", "amount", "installment_label", "notes", "payment_mode",
+    "payment_date", "receipt_no", "amount", "installment_label", "notes",
+    "payment_mode", "showroom",
 })
 _PENALTY_COLS = frozenset({
     "charge_date", "receipt_no", "amount", "notes",
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS borrowers (
     loan_date           TEXT    NOT NULL,
     notes               TEXT,
     closed              INTEGER NOT NULL DEFAULT 0,
+    reopened            INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT    DEFAULT (datetime('now'))
 );
 
@@ -81,6 +83,7 @@ CREATE TABLE IF NOT EXISTS payments (
     installment_label   TEXT,
     notes               TEXT,
     payment_mode        TEXT    DEFAULT '',
+    showroom            TEXT    DEFAULT '',
     created_at          TEXT    DEFAULT (datetime('now'))
 );
 
@@ -110,9 +113,13 @@ CREATE INDEX IF NOT EXISTS idx_seizings_borrower ON seizings(borrower_id);
 
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    # timeout + busy_timeout let a writer wait (up to 5s) for a lock instead of
+    # failing instantly with "database is locked" — the threaded HTTP server can
+    # have a heartbeat / list-refresh / save overlap.
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -127,6 +134,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE borrowers ADD COLUMN phone2 TEXT DEFAULT ''")
         if "guarantor_phone2" not in cols:
             conn.execute("ALTER TABLE borrowers ADD COLUMN guarantor_phone2 TEXT DEFAULT ''")
+        # reopened (v1.31): distinguishes a deliberately re-opened paid loan from
+        # one that was never closed, so the auto-close rule can't silently re-close it.
+        if "reopened" not in cols:
+            conn.execute("ALTER TABLE borrowers ADD COLUMN reopened INTEGER NOT NULL DEFAULT 0")
 
         # payments.payment_mode — added in v1.28. We deliberately do NOT
         # backfill existing rows. Payments made before this feature existed
@@ -136,6 +147,9 @@ def init_db() -> None:
         pay_cols = [r[1] for r in conn.execute("PRAGMA table_info(payments)").fetchall()]
         if "payment_mode" not in pay_cols:
             conn.execute("ALTER TABLE payments ADD COLUMN payment_mode TEXT DEFAULT ''")
+        # showroom (v1.31): optional per-payment showroom tag.
+        if "showroom" not in pay_cols:
+            conn.execute("ALTER TABLE payments ADD COLUMN showroom TEXT DEFAULT ''")
 
         # One-time data fix: an earlier (un-released) v1.28 build wrongly
         # set every existing payment to 'Cash' on first run. Anyone whose DB
@@ -264,15 +278,15 @@ def get_borrower(borrower_id: int) -> sqlite3.Row | None:
 
 def add_payment(borrower_id: int, payment_date: str, amount: float,
                 receipt_no: str = "", installment_label: str = "",
-                notes: str = "", payment_mode: str = "") -> int:
+                notes: str = "", payment_mode: str = "", showroom: str = "") -> int:
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO payments
                (borrower_id, payment_date, receipt_no, amount,
-                installment_label, notes, payment_mode)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                installment_label, notes, payment_mode, showroom)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (borrower_id, payment_date, receipt_no, amount,
-             installment_label, notes, payment_mode or ""),
+             installment_label, notes, payment_mode or "", showroom or ""),
         )
         return cur.lastrowid
 
@@ -285,11 +299,11 @@ def add_payments_many(borrower_id: int, rows: list) -> list:
         for r in rows:
             cur = conn.execute(
                 "INSERT INTO payments (borrower_id, payment_date, receipt_no, "
-                "amount, installment_label, notes, payment_mode) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "amount, installment_label, notes, payment_mode, showroom) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (borrower_id, r["payment_date"], r.get("receipt_no", ""),
                  r["amount"], r.get("installment_label", ""), r.get("notes", ""),
-                 r.get("payment_mode") or ""),
+                 r.get("payment_mode") or "", r.get("showroom") or ""),
             )
             ids.append(cur.lastrowid)
     return ids
@@ -385,6 +399,47 @@ def all_receipts_by_borrower() -> dict[int, list[dict]]:
             "notes": r["notes"] or "",
         })
     return out
+
+
+def payment_rows_for_analytics() -> list[sqlite3.Row]:
+    """Every payment joined to its borrower's showroom. Used by the Portfolio
+    page to break collections down by month, showroom, and payment mode, and to
+    split each payment into its interest vs principal portion."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT p.payment_date AS d, p.amount AS amount, "
+            "       COALESCE(p.payment_mode, '') AS mode, p.borrower_id AS bid, "
+            "       COALESCE(b.showroom, '') AS showroom "
+            "FROM payments p JOIN borrowers b ON b.id = p.borrower_id"
+        ).fetchall()
+
+
+def distinct_payment_months() -> list[str]:
+    """Distinct 'YYYY-MM' months that have at least one payment, newest first.
+    Used to populate the Portfolio month selector."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT substr(payment_date, 1, 7) AS ym FROM payments "
+            "WHERE payment_date IS NOT NULL AND TRIM(payment_date) != '' "
+            "ORDER BY ym DESC"
+        ).fetchall()
+        return [r["ym"] for r in rows]
+
+
+def sum_in_month(table: str, date_col: str, ym: str) -> float:
+    """SUM(amount) for rows whose date column falls in the given 'YYYY-MM'.
+    Table/column are whitelisted to keep the f-string injection-safe."""
+    allowed = {("payments", "payment_date"), ("penalties", "charge_date"),
+               ("seizings", "seizing_date")}
+    if (table, date_col) not in allowed:
+        raise ValueError(f"sum_in_month: disallowed {table}.{date_col}")
+    with connect() as conn:
+        row = conn.execute(
+            f"SELECT COALESCE(SUM(amount), 0) AS t FROM {table} "
+            f"WHERE {date_col} LIKE ?",
+            (ym + "%",),
+        ).fetchone()
+        return float(row["t"])
 
 
 def all_last_payment_dates() -> dict[int, str]:
@@ -506,6 +561,18 @@ def reset_password() -> None:
     with connect() as conn:
         _meta_delete(conn, "password_salt")
         _meta_delete(conn, "password_hash")
+
+
+# ── Simple app settings (business name, text size, …) ────────────────
+def get_setting(key: str, default: str = "") -> str:
+    with connect() as conn:
+        val = _meta_get(conn, key)
+        return val if val is not None else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with connect() as conn:
+        _meta_set(conn, key, value)
 
 
 def add_seizing(borrower_id: int, seizing_date: str, amount: float,

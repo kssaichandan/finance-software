@@ -20,7 +20,8 @@
   --gray-light: #f8fafc;
   --border: #e2e8f0;
   --text: #1e293b;
-  --text-muted: #64748b;
+  --text-muted: #475569;   /* darkened from #64748b for WCAG-AA contrast */
+  --violet: #7c3aed;       /* "Closed" accent — was hardcoded ad hoc */
   --radius: 10px;
   --shadow: 0 1px 4px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.04);
   --shadow-lg: 0 8px 32px rgba(0,0,0,0.16);
@@ -29,7 +30,7 @@
 
 /* ── Reset ────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; overflow: hidden; height: 100vh; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; overflow: hidden; height: 100vh; }
 a { text-decoration: none; cursor: pointer; }
 button { font-family: var(--font); cursor: pointer; }
 input, select, textarea { font-family: var(--font); }
@@ -75,11 +76,34 @@ input, select, textarea { font-family: var(--font); }
 .stat-card.danger { border-color: var(--danger); }
 .stat-card.primary { border-color: var(--primary); }
 .stat-card.gray { border-color: #94a3b8; }
+.stat-card.success { border-color: var(--success); }
 .stat-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 8px; }
 .stat-value { font-size: 28px; font-weight: 700; color: var(--text); line-height: 1; }
 .stat-value.danger { color: var(--danger); }
 .stat-value.primary { color: var(--primary); }
+.stat-value.success { color: var(--success); }
 .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* Section heading between portfolio blocks */
+.section-heading { font-size: 14px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; margin: 8px 0 12px; }
+.month-heading { display: flex; align-items: center; gap: 10px; text-transform: none; letter-spacing: normal; }
+.month-heading select { text-transform: none; font-weight: 600; }
+
+/* Collected-by-showroom list inside the month block */
+.msh-list { padding: 6px 20px 14px; }
+.msh-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid #f1f5f9; font-size: 13.5px; }
+.msh-row:last-child { border-bottom: none; }
+.msh-name { font-weight: 600; color: var(--text); }
+.msh-amt { font-weight: 700; color: var(--success); }
+
+/* 6-month collection trend bars (Portfolio) */
+.mtrend-row { display: flex; align-items: center; gap: 14px; padding: 6px 0; }
+.mtrend-label { flex: 0 0 78px; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+.mtrend-bar-wrap { flex: 1; height: 16px; background: var(--gray-light); border-radius: 999px; overflow: hidden; }
+.mtrend-bar { height: 100%; background: var(--primary); border-radius: 999px; min-width: 2px; transition: width 0.5s; }
+.mtrend-bar.now { background: var(--success); }
+.mtrend-val { flex: 0 0 170px; text-align: right; font-size: 13px; font-weight: 600; color: var(--text); }
+.mtrend-int { color: var(--text-muted); font-weight: 400; font-size: 11.5px; margin-left: 8px; }
 
 /* ── Card ─────────────────────────────────────────────────────── */
 .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
@@ -180,6 +204,53 @@ table.data-table { width: 100%; border-collapse: collapse; }
 .filter-select { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; background: white; color: var(--text); outline: none; cursor: pointer; white-space: nowrap; }
 .filter-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
 .pick-date-input { width: 150px !important; padding: 9px 12px !important; font-size: 13.5px !important; }
+
+/* ── Borrowers filter panel ──────────────────────────────────────── */
+.filter-panel {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px 16px; margin-bottom: 16px;
+}
+.filter-panel-head {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+}
+.fp-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.fp-active {
+  font-size: 12px; color: var(--text-muted); padding: 2px 8px;
+  border-radius: 999px; background: transparent;
+}
+.fp-active.on { background: #eff6ff; color: #1e40af; font-weight: 600; }
+.fp-clear { margin-left: auto; }
+
+.filter-grid {
+  display: grid; gap: 12px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+.filter-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.filter-field > label {
+  font-size: 11.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted);
+}
+.filter-field .filter-select,
+.filter-field .form-control { width: 100%; }
+.filter-range { display: flex; align-items: center; gap: 6px; }
+.filter-range .form-control { min-width: 0; }
+.range-dash { color: var(--text-muted); }
+.filter-checks { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
+.filter-checks .filter-label { font-size: 13px; color: var(--text); }
+
+/* Custom (build-your-own) conditions */
+.filter-custom { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.fc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.fc-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.muted-hint { font-weight: 400; color: var(--text-muted); font-size: 12px; }
+.fc-empty { font-size: 12.5px; color: var(--text-muted); padding: 4px 0 2px; }
+.cc-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.cc-row .cc-field { flex: 0 0 200px; }
+.cc-row .cc-op { flex: 0 0 150px; }
+.cc-row .cc-value { flex: 1 1 160px; min-width: 120px; }
+.cc-row .cc-del { flex: 0 0 auto; color: var(--danger); }
+.cc-row .cc-del:hover { background: var(--danger-light); border-color: var(--danger-border); }
 .table-scroll-full { max-height: calc(100vh - 235px); overflow-y: auto; }
 
 /* ── Form ─────────────────────────────────────────────────────── */
@@ -196,7 +267,7 @@ table.data-table { width: 100%; border-collapse: collapse; }
 .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
 .form-control.input-invalid { border-color: var(--danger); background: #fef2f2; }
 .form-control.input-invalid:focus { box-shadow: 0 0 0 3px rgba(220,38,38,0.15); }
-.form-control::placeholder { color: #a1afc0; }
+.form-control::placeholder { color: #8896a8; }
 /* Remove the up/down spinner arrows on number inputs */
 .form-control[type=number]::-webkit-inner-spin-button,
 .form-control[type=number]::-webkit-outer-spin-button {
@@ -272,10 +343,10 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 .total-owed-row { border-top: 2px solid var(--danger) !important; margin-top: 2px; padding-top: 6px !important; }
 .total-owed-row .summary-key { color: var(--danger); font-weight: 700; font-size: 14px; }
 .total-owed-row .summary-val { font-size: 17px !important; }
-.btn-xs { padding: 3px 7px !important; font-size: 11px !important; line-height: 1.4 !important; }
-.btn-danger-sm { background: transparent; border: 1px solid var(--danger); color: var(--danger); border-radius: 6px; padding: 3px 7px; font-size: 11px; line-height: 1.4; cursor: pointer; transition: all 0.15s; }
+.btn-xs { padding: 5px 10px !important; font-size: 13px !important; line-height: 1.4 !important; }
+.btn-danger-sm { background: transparent; border: 1px solid var(--danger); color: var(--danger); border-radius: 6px; padding: 5px 10px; font-size: 13px; line-height: 1.4; cursor: pointer; transition: all 0.15s; }
 .btn-danger-sm:hover { background: var(--danger); color: white; }
-.action-cell { white-space: nowrap; width: 72px; text-align: right; }
+.action-cell { white-space: nowrap; width: 104px; text-align: right; }
 .detail-actions { padding: 16px 28px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap; background: var(--gray-light); }
 .detail-tables { padding: 20px 28px; display: flex; flex-direction: column; gap: 24px; }
 .detail-table-section h4 { font-size: 13px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
@@ -401,6 +472,17 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 .mode-pill.mode-phonepe { background: #f3e8ff; color: #6b21a8; border-color: #e9d5ff; }
 .mode-pill.mode-scanner { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
 
+/* Payment mode chips + showroom picker on one row */
+.mode-showroom-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.mode-showroom-row .mode-chips { margin-top: 0; }
+.mode-showroom-row .form-control { flex: 1; min-width: 160px; }
+/* Showroom tag shown beside the mode pill in payment tables */
+.sh-pill {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 6px;
+  padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+  background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; white-space: nowrap;
+}
+
 .book-ref-tag {
   display: inline-flex;
   align-items: center;
@@ -420,3 +502,124 @@ textarea.form-control { resize: vertical; min-height: 64px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* ══════════════════════════════════════════════════════════════════
+   v1.31 — audit fixes: focus visibility, new components, responsive,
+   text-size scaling. Appended so the original rules above are untouched.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Keyboard focus visibility (was missing on buttons / nav / links) ── */
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.sidebar :focus-visible { outline-color: #93c5fd; }
+
+/* "Closed" name colour now via the token */
+.data-table tbody tr.row-closed td strong { color: var(--violet); }
+
+/* ── Sidebar global search ──────────────────────────────────────── */
+.sidebar-search { padding: 12px 12px 4px; }
+.sidebar-search input {
+  width: 100%; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06);
+  color: #e2e8f0; font-size: 13px; outline: none;
+}
+.sidebar-search input::placeholder { color: #94a3b8; }
+.sidebar-search input:focus { border-color: var(--primary); background: rgba(255,255,255,0.1); }
+
+/* ── Dashboard: totals strip + reminder buttons ─────────────────── */
+.dash-stats { margin-bottom: 16px; }
+.stat-value-md { font-size: 22px; }
+.stat-card.clickable { cursor: pointer; transition: box-shadow 0.15s, transform 0.1s; }
+.stat-card.clickable:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+.dash-card-actions { display: inline-flex; align-items: center; gap: 8px; }
+.dash-remind {
+  border: none; background: #25d366; color: #fff; cursor: pointer;
+  width: 30px; height: 30px; border-radius: 8px; font-size: 15px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.dash-remind:hover { background: #1ebe5b; }
+
+/* ── Borrowers: filter toggle + sortable headers ────────────────── */
+.fp-toggle {
+  background: none; border: none; cursor: pointer; font-size: 14px; font-weight: 600;
+  color: var(--text); display: inline-flex; align-items: center; gap: 6px; padding: 0;
+}
+.fp-caret { font-size: 11px; color: var(--text-muted); }
+.th-sort { cursor: pointer; user-select: none; }
+.th-sort:hover { color: var(--primary); }
+.sort-caret { color: var(--primary); font-size: 10px; }
+
+/* ── Row selection checkboxes (selective PDF export) ────────────── */
+.th-check, .td-check { width: 38px; text-align: center; padding-left: 10px; padding-right: 6px; }
+.row-check, #select-all-rows { width: 17px; height: 17px; cursor: pointer; accent-color: var(--primary); }
+.selection-info { font-size: 13px; color: var(--text-muted); white-space: nowrap; }
+.sel-clear { color: var(--primary); cursor: pointer; font-weight: 600; }
+.sel-clear:hover { text-decoration: underline; }
+
+/* ── Date field (text input + 📅 picker button) ─────────────────── */
+.date-field { display: flex; gap: 6px; align-items: stretch; }
+.date-field .form-control { flex: 1; min-width: 0; }
+.date-pick-btn {
+  flex: 0 0 auto; border: 1px solid var(--border); background: var(--gray-light);
+  border-radius: 8px; padding: 0 12px; font-size: 16px; cursor: pointer; line-height: 1;
+}
+.date-pick-btn:hover { background: #eef2f7; border-color: #cbd5e1; }
+
+/* Remove-payment-block button in the multi-payment form */
+.pay-block-title { display: flex; align-items: center; justify-content: space-between; }
+.pay-block-del {
+  border: 1px solid var(--danger-border); background: var(--danger-light); color: var(--danger);
+  border-radius: 6px; width: 24px; height: 24px; cursor: pointer; font-size: 12px; line-height: 1;
+}
+.pay-block-del:hover { background: var(--danger); color: #fff; }
+
+/* ── Detail modal: sticky actions + danger zone ─────────────────── */
+.detail-actions { position: sticky; top: 0; z-index: 5; }
+.detail-danger {
+  margin: 0 28px 24px; padding: 14px 16px; border: 1px solid var(--danger-border);
+  background: var(--danger-light); border-radius: 10px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.detail-danger-hint { font-size: 12.5px; color: var(--danger); }
+
+/* ── Portfolio: combined recovery card ──────────────────────────── */
+.recovery-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.recovery-item { padding: 20px 24px; }
+.recovery-item + .recovery-item { border-left: 1px solid var(--border); }
+.recovery-val { font-size: 26px; font-weight: 700; color: var(--warning); }
+.recovery-label { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; }
+
+/* ── Settings: text-size options ────────────────────────────────── */
+.text-size-options { display: flex; gap: 10px; flex-wrap: wrap; }
+.size-opt {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+  border: 1.5px solid var(--border); border-radius: 999px; cursor: pointer; font-size: 14px;
+}
+.size-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.size-opt:hover { border-color: var(--primary); }
+.size-opt.checked { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* ── Text-size scaling (Settings) — zoom keeps layout proportional ─ */
+html[data-text-size="large"] .main-content,
+html[data-text-size="large"] .modal-box,
+html[data-text-size="large"] #toasts { zoom: 1.12; }
+html[data-text-size="xlarge"] .main-content,
+html[data-text-size="xlarge"] .modal-box,
+html[data-text-size="xlarge"] #toasts { zoom: 1.25; }
+
+/* ── Responsive: guard against small windows / 125–150% Windows scaling ── */
+@media (max-width: 1100px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .dash-grid { grid-template-columns: 1fr; }
+  /* Loan Info + Summary stay side by side — the modal is a fixed ~960px box,
+     so it always has room for two columns. */
+  .form-grid { grid-template-columns: 1fr; }
+  .recovery-grid { grid-template-columns: 1fr; }
+  .recovery-item + .recovery-item { border-left: none; border-top: 1px solid var(--border); }
+}
+@media (max-width: 760px) {
+  .sidebar { width: 64px; min-width: 64px; }
+  .sidebar-brand .brand-name, .nav-item span:not(.nav-icon), .sidebar-search,
+  .sidebar-refresh { display: none; }
+  .stat-grid { grid-template-columns: 1fr !important; }
+  .view-container { padding: 18px 16px; }
+}
