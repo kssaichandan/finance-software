@@ -436,15 +436,16 @@ function requirePasswordThen(description, confirmMsg, action, opts) {
   const btnLabel = opts.btnLabel || 'Confirm Delete';
   const btnClass = opts.btnClass || 'btn-danger';
   if (!_hasPassword) {
-    if (!confirm(confirmMsg)) return;
+    if (!confirm(confirmMsg)) { if (opts.onCancel) opts.onCancel(); return; }
     action('');
     return;
   }
+  window._pwOnCancel = opts.onCancel || null;
   document.getElementById('modal-inner').innerHTML = `
     <div class="mini-modal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <h3>${title}</h3>
-        <button class="modal-close" onclick="closeModal()">✕</button>
+        <button class="modal-close" onclick="pwCancel()">✕</button>
       </div>
       <p style="margin:0 0 14px;color:var(--text)">${esc(description)}</p>
       <form id="pw-prompt-form">
@@ -456,7 +457,7 @@ function requirePasswordThen(description, confirmMsg, action, opts) {
         </div>
         <div style="display:flex;gap:10px">
           <button type="submit" class="btn ${btnClass}">${btnLabel}</button>
-          <button type="button" class="btn btn-outline" onclick="closeModal()">Cancel</button>
+          <button type="button" class="btn btn-outline" onclick="pwCancel()">Cancel</button>
         </div>
       </form>
     </div>`;
@@ -468,6 +469,7 @@ function requirePasswordThen(description, confirmMsg, action, opts) {
     const pwd = input.value;
     const r = await api('verify_password', pwd);
     if (r && r.success) {
+      window._pwOnCancel = null;
       closeModal();
       action(pwd);
     } else {
@@ -536,7 +538,7 @@ async function renderSettings() {
         no manual copying. A dated copy is also kept each day so you can roll back.
       </p>
       <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer;font-size:14px;font-weight:500">
-        <input type="checkbox" id="ab-enabled" ${s.autobackup_enabled ? 'checked' : ''} style="width:17px;height:17px;accent-color:var(--primary)" />
+        <input type="checkbox" id="ab-enabled" ${s.autobackup_enabled ? 'checked' : ''} style="width:17px;height:17px;accent-color:var(--primary)" onchange="saveAutobackup()" />
         <span>Turn on automatic backup (after every change)</span>
       </label>
       <div class="form-group" style="margin-bottom:10px">
@@ -547,9 +549,10 @@ async function renderSettings() {
         <span class="form-hint">Tip: choose a folder inside OneDrive / Google Drive so it syncs to the cloud.</span>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button type="button" class="btn btn-primary" onclick="saveAutobackup()">Save</button>
+        <button type="button" class="btn btn-primary" onclick="saveAutobackup()">Save folder</button>
         <button type="button" class="btn btn-outline" onclick="runAutobackupNow()">Back up now</button>
       </div>
+      <p class="form-hint" style="margin-top:8px">The on/off switch saves by itself. Use “Save folder” only after changing the folder path.</p>
       ${statusLine}
     </div>`;
 
@@ -676,13 +679,18 @@ function pickAutobackupFolder(btn) {
 }
 
 async function saveAutobackup() {
-  const on = !!(document.getElementById('ab-enabled') || {}).checked;
+  const cb = document.getElementById('ab-enabled');
+  const on = !!(cb && cb.checked);
   const dirEl = document.getElementById('ab-dir');
   const folder = ((dirEl && dirEl.value) || '').trim();
-  if (on && !folder) { toast('Please choose or paste a backup folder first.', 'error'); return; }
+  if (on && !folder) {
+    toast('Choose or paste a backup folder first.', 'error');
+    if (cb) cb.checked = false;   // revert the tick
+    return;
+  }
 
   const apply = async () => {
-    await api('set_setting', 'autobackup_dir', folder);
+    if (folder) await api('set_setting', 'autobackup_dir', folder);
     await api('set_setting', 'autobackup_enabled', on ? '1' : '0');
     if (on) {
       loading(true);
@@ -697,12 +705,14 @@ async function saveAutobackup() {
   };
 
   // Changing the auto-backup setting requires the password (if one is set).
+  // On cancel, re-render so the checkbox snaps back to its real saved state.
   if (_hasPassword) {
     requirePasswordThen(
       'Enter your password to change automatic backup settings.',
       '',
       () => apply(),
-      { title: '🔐 Confirm with Password', btnLabel: 'Confirm', btnClass: 'btn-primary' }
+      { title: '🔐 Confirm with Password', btnLabel: 'Confirm', btnClass: 'btn-primary',
+        onCancel: () => renderSettings() }
     );
   } else {
     apply();
@@ -713,13 +723,13 @@ async function runAutobackupNow() {
   const dirEl = document.getElementById('ab-dir');
   const folder = ((dirEl && dirEl.value) || '').trim();
   if (!folder) { toast('Choose or paste a backup folder first.', 'error'); return; }
-  // Manual one-off backup — does NOT change the saved (password-protected) folder.
+  // Manual one-off backup — does NOT change saved settings and does NOT
+  // re-render (so it can't wipe an in-progress toggle).
   loading(true);
   let r;
   try { r = await api('backup_to_folder', folder); } finally { loading(false); }
   if (r && r.success) toast('Backup saved → ' + r.path, 'success');
   else toast('Backup failed: ' + (r && r.error || 'unknown'), 'error');
-  renderSettings();
 }
 
 // Load persisted settings once at startup (text size + business name).
@@ -3049,6 +3059,14 @@ function closeModal() {
 
 function handleOverlayClick(e) {
   if (e.target === document.getElementById('modal-overlay')) closeModal();
+}
+
+// Cancel a password prompt and run its onCancel (e.g. to revert a toggle).
+function pwCancel() {
+  const cb = window._pwOnCancel;
+  window._pwOnCancel = null;
+  closeModal();
+  if (cb) cb();
 }
 
 // ── Keyboard shortcuts ───────────────────────────────────────────
