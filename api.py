@@ -757,6 +757,65 @@ class API:
             s.total_paid * ratio.get(s.borrower_id, 0.0) for s in summaries
         )
 
+        # ── Book-level analytics for the Portfolio page ──────────────
+        # All derived from the `summaries` already loaded above — no extra
+        # DB round-trips.
+
+        # Loan-health composition (counts + still-owed per status).
+        status_breakdown = {
+            "overdue": {"label": "Overdue", "count": 0, "outstanding": 0.0},
+            "on_time": {"label": "On time", "count": 0, "outstanding": 0.0},
+            "advance": {"label": "Advance", "count": 0, "outstanding": 0.0},
+            "closed":  {"label": "Closed",  "count": 0, "outstanding": 0.0},
+        }
+        for s in summaries:
+            if s.closed:
+                status_breakdown["closed"]["count"] += 1
+            elif s.is_overdue:
+                status_breakdown["overdue"]["count"] += 1
+                status_breakdown["overdue"]["outstanding"] += s.remaining
+            elif s.is_advance:
+                status_breakdown["advance"]["count"] += 1
+                status_breakdown["advance"]["outstanding"] += s.remaining
+            else:
+                status_breakdown["on_time"]["count"] += 1
+                status_breakdown["on_time"]["outstanding"] += s.remaining
+
+        # Cash-flow forecast — the next unpaid installment for each on-track loan.
+        upcoming = []
+        for s in summaries:
+            if s.closed or s.is_overdue:
+                continue
+            next_no = s.expected_installments + 1
+            if next_no > s.period_months:
+                continue
+            next_due = models._add_months(s.loan_date, next_no)
+            days_until = (next_due - today).days
+            if days_until < 0:
+                continue
+            upcoming.append({
+                "borrower_id": s.borrower_id,
+                "name": s.name,
+                "phone": s.phone,
+                "due_date": models.fmt_date(next_due),
+                "days_until": days_until,
+                "amount": s.installment_amount,
+            })
+        upcoming.sort(key=lambda x: x["days_until"])
+        upcoming_block = {
+            "due_7": sum(u["amount"] for u in upcoming if u["days_until"] <= 7),
+            "due_7_count": sum(1 for u in upcoming if u["days_until"] <= 7),
+            "due_30": sum(u["amount"] for u in upcoming if u["days_until"] <= 30),
+            "due_30_count": sum(1 for u in upcoming if u["days_until"] <= 30),
+            "list": upcoming[:8],
+        }
+
+        # Averages / KPIs across the whole book.
+        avg_loan = (total_principal / total_loans) if total_loans else 0.0
+        avg_rate = (sum(float(r["interest_rate"]) for r in rows) / total_loans) if total_loans else 0.0
+        avg_period = (sum(float(r["period_months"]) for r in rows) / total_loans) if total_loans else 0.0
+        biggest_loan = max((float(r["loan_amount"]) for r in rows), default=0.0)
+
         # Months the user can pick in the selector — every month that has a
         # payment, plus the current month (so it is always selectable), newest
         # first.
@@ -778,6 +837,12 @@ class API:
             "total_overdue_amount": total_overdue_amt,
             "total_interest_expected": total_interest_expected,
             "total_interest_earned": total_interest_earned,
+            "status_breakdown": status_breakdown,
+            "upcoming": upcoming_block,
+            "avg_loan": avg_loan,
+            "avg_rate": avg_rate,
+            "avg_period": avg_period,
+            "biggest_loan": biggest_loan,
             "this_month": _month_breakdown(this_ym, ratio, pay_rows),
             "available_months": [{"month": m, "label": _month_label(m)} for m in available],
             "monthly": [

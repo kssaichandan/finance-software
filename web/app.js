@@ -3086,6 +3086,15 @@ async function renderPortfolio() {
     ? Math.min(100, Math.round((p.total_collected / p.total_payable) * 100))
     : 0;
 
+  // ── "If every customer clears their dues" ──
+  // Loan money only (principal + interest) — penalties/seizing excluded.
+  const fcAlreadyIn   = p.total_collected || 0;   // already received
+  const fcStillToCome = p.total_outstanding || 0; // remaining to receive
+  const fcGrandTotal  = p.total_payable || 0;      // already + remaining
+  const fcRemainPct   = Math.max(0, 100 - collectedPct);
+  const fcStillOwing  = p.active_loans || 0;       // customers who haven't cleared yet
+  const fcFullyDone   = fcStillToCome <= 0 && fcGrandTotal > 0;
+
   // Cache the payload so the month selector can re-render without refetching.
   window._portfolioData = p;
   window._selMonth = (p.this_month || {}).month || '';
@@ -3120,11 +3129,90 @@ async function renderPortfolio() {
       <td>${r.outstanding > 0 ? money(r.outstanding) : '—'}</td>
     </tr>`).join('') || '<tr class="no-data"><td colspan="5">No showroom data yet.</td></tr>';
 
+  // ── Loan health breakdown (counts + still-owed per status) ──
+  const sb = p.status_breakdown || {};
+  const sbDefs = [
+    ['overdue', 'danger',  'Behind on payments'],
+    ['on_time', 'success', 'Paying on schedule'],
+    ['advance', 'primary', 'Paid ahead'],
+    ['closed',  'gray',    'Fully cleared'],
+  ];
+  const sbTotal = sbDefs.reduce((t, [k]) => t + ((sb[k] || {}).count || 0), 0) || 1;
+  const healthCards = sbDefs.map(([k, cls, sub]) => {
+    const r = sb[k] || { label: k, count: 0, outstanding: 0 };
+    const owed = (k !== 'closed' && r.outstanding > 0) ? money(r.outstanding) + ' owed' : sub;
+    return `
+      <div class="stat-card ${cls}">
+        <div class="stat-label">${esc(r.label || k)}</div>
+        <div class="stat-value ${cls === 'gray' ? '' : cls}" style="font-size:22px">${r.count}</div>
+        <div class="stat-sub">${owed}</div>
+      </div>`;
+  }).join('');
+  const healthBar = sbDefs.map(([k, cls]) => {
+    const pct = Math.round(((sb[k] || {}).count || 0) / sbTotal * 100);
+    return pct > 0 ? `<div class="lh-seg lh-${cls}" style="width:${pct}%" title="${esc((sb[k] || {}).label || k)}: ${(sb[k] || {}).count || 0}"></div>` : '';
+  }).join('');
+
+  // ── Key numbers (KPIs) ──
+  const kpis = [
+    [money(p.avg_loan || 0), 'Average loan size'],
+    [(p.avg_rate || 0).toFixed(0) + '%', 'Avg interest rate / yr'],
+    [Math.round(p.avg_period || 0) + ' mo', 'Avg loan period'],
+    [money(p.biggest_loan || 0), 'Biggest single loan'],
+  ];
+  const kpiHtml = kpis.map(([v, l]) =>
+    `<div class="kpi"><div class="kpi-val">${v}</div><div class="kpi-label">${l}</div></div>`).join('');
+
+  // ── Cash-flow forecast (money coming in soon) ──
+  const up = p.upcoming || {};
+  const upRows = (up.list || []).map(u => `
+    <div class="up-row clickable" onclick="showDetail(${u.borrower_id})">
+      <span class="up-name">${esc(u.name)}</span>
+      <span class="up-when">${u.days_until === 0 ? 'today' : u.days_until === 1 ? 'tomorrow' : 'in ' + u.days_until + ' days'} · ${esc(u.due_date)}</span>
+      <span class="up-amt">${money(u.amount)}</span>
+    </div>`).join('') || '<div class="fc-empty" style="padding:14px 20px">No installments due in the near future.</div>';
+
   document.getElementById('view').innerHTML = `
     <div class="page-header">
       <div>
         <div class="page-title">Portfolio Summary</div>
         <div class="page-subtitle">Overall health of your lending book</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;border:2px solid var(--primary)">
+      <div class="card-header"><span class="card-title">💰 If Every Customer Clears Their Dues</span></div>
+      <div class="fc-clear">
+        <div class="fc-clear-item">
+          <div class="stat-label">Already Collected</div>
+          <div class="stat-value success" style="font-size:24px">${money(fcAlreadyIn)}</div>
+          <div class="stat-sub">Money received so far</div>
+        </div>
+        <div class="fc-clear-op">+</div>
+        <div class="fc-clear-item">
+          <div class="stat-label">Still To Receive</div>
+          <div class="stat-value ${fcStillToCome > 0 ? 'danger' : ''}" style="font-size:24px">${money(fcStillToCome)}</div>
+          <div class="stat-sub">Outstanding from all customers</div>
+        </div>
+        <div class="fc-clear-op">=</div>
+        <div class="fc-clear-item fc-clear-total">
+          <div class="stat-label">Grand Total In Hand</div>
+          <div class="stat-value" style="font-size:26px;color:var(--success)">${money(fcGrandTotal)}</div>
+          <div class="stat-sub">Once everyone fully clears</div>
+        </div>
+      </div>
+      <div class="fc-clear-foot">
+        <div class="fc-clear-barhead">
+          <span><strong style="color:var(--success)">${collectedPct}%</strong> collected</span>
+          <span><strong>${fcRemainPct}%</strong> still to come</span>
+        </div>
+        <div class="fc-clear-bar"><div class="fc-clear-bar-fill" style="width:${collectedPct}%"></div></div>
+        <div class="fc-clear-note">
+          ${fcFullyDone
+            ? `🎉 Every customer has cleared their dues. You have received the full <strong>${money(fcGrandTotal)}</strong>.`
+            : `You've already received <strong style="color:var(--success)">${money(fcAlreadyIn)}</strong>. If all <strong>${fcStillOwing}</strong> customer(s) who still owe pay off their balance, another <strong style="color:var(--danger)">${money(fcStillToCome)}</strong> comes in — bringing your total to <strong>${money(fcGrandTotal)}</strong>.`}
+        </div>
+        <div class="fc-clear-hint">Assumes every loan is paid in full (principal + interest). Penalties &amp; seizing costs are not included.</div>
       </div>
     </div>
 
@@ -3162,6 +3250,38 @@ async function renderPortfolio() {
         <div class="stat-value ${p.overdue_count > 0 ? 'danger' : ''}" style="font-size:22px">${money(p.total_overdue_amount)}</div>
         <div class="stat-sub">${p.overdue_count} borrower(s) behind on payments</div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header"><span class="card-title">Loan Health — Where Your Book Stands</span></div>
+      <div style="padding:16px 20px 6px">
+        <div class="lh-bar">${healthBar}</div>
+      </div>
+      <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);padding:6px 20px 18px;gap:12px">
+        ${healthCards}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header"><span class="card-title">Key Numbers</span></div>
+      <div class="kpi-row">${kpiHtml}</div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-header"><span class="card-title">Money Coming In Soon — Cash-Flow Forecast</span></div>
+      <div class="stat-grid" style="grid-template-columns:repeat(2,1fr);padding:18px 20px 8px;gap:12px">
+        <div class="stat-card success">
+          <div class="stat-label">Expected Next 7 Days</div>
+          <div class="stat-value success" style="font-size:22px">${money(up.due_7 || 0)}</div>
+          <div class="stat-sub">${up.due_7_count || 0} installment(s) due</div>
+        </div>
+        <div class="stat-card primary">
+          <div class="stat-label">Expected Next 30 Days</div>
+          <div class="stat-value primary" style="font-size:22px">${money(up.due_30 || 0)}</div>
+          <div class="stat-sub">${up.due_30_count || 0} installment(s) due</div>
+        </div>
+      </div>
+      <div class="up-list">${upRows}</div>
     </div>
 
     <div id="month-section">${renderMonthSection(p.this_month)}</div>
