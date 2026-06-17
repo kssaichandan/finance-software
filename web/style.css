@@ -84,17 +84,25 @@ input, select, textarea { font-family: var(--font); }
 .stat-value.success { color: var(--success); }
 .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
-/* "If every customer clears their dues" card (Portfolio) */
-.fc-clear { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; flex-wrap: wrap; }
-.fc-clear-item { flex: 1 1 150px; min-width: 140px; }
-.fc-clear-op { font-size: 28px; font-weight: 700; color: var(--text-muted); flex: 0 0 auto; }
-.fc-clear-total { background: var(--success-light); border: 1px solid var(--success-border); border-radius: 10px; padding: 12px 16px; flex-basis: 180px; }
-.fc-clear-foot { padding: 0 24px 20px; border-top: 1px solid var(--border); margin-top: 4px; padding-top: 16px; }
-.fc-clear-barhead { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--text-muted); margin-bottom: 6px; }
-.fc-clear-bar { height: 14px; background: var(--border); border-radius: 999px; overflow: hidden; }
-.fc-clear-bar-fill { height: 100%; background: var(--success); border-radius: 999px; min-width: 2px; transition: width 0.5s; }
-.fc-clear-note { font-size: 13.5px; color: var(--text); margin-top: 14px; line-height: 1.7; }
-.fc-clear-hint { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+/* "If every customer clears their dues" card (Portfolio) — two simple panels */
+.fc2-card { margin-bottom: 16px; border: 2px solid var(--primary); }
+.fc2-grid { display: flex; gap: 16px; padding: 18px 20px 6px; flex-wrap: wrap; }
+.fc2-panel { flex: 1 1 260px; min-width: 240px; border-radius: 12px; padding: 18px 20px; text-align: center; }
+.fc2-panel.today { background: var(--success-light); border: 1px solid var(--success-border); }
+.fc2-panel.fullterm { background: var(--gray-light); border: 1px solid var(--border); }
+.fc2-head { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 10px; }
+.fc2-panel.today .fc2-head { color: var(--success); }
+.fc2-hero { font-size: 32px; font-weight: 800; line-height: 1.1; color: var(--text); }
+.fc2-panel.today .fc2-hero { color: var(--success); }
+.fc2-herosub { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; }
+.fc2-break { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 14px 0 4px; }
+.fc2-bit-val { font-size: 17px; font-weight: 700; color: var(--text); }
+.fc2-bit-lbl { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.fc2-op { font-size: 22px; font-weight: 700; color: var(--text-muted); }
+.fc2-extra { display: inline-block; margin: 14px 0 4px; padding: 7px 14px; border-radius: 999px;
+  background: #eff6ff; border: 1px solid #bfdbfe; color: var(--primary); font-weight: 700; font-size: 14px; }
+.fc2-foot { font-size: 12px; color: var(--text-muted); margin-top: 12px; line-height: 1.5; }
+.fc2-note { padding: 4px 22px 18px; font-size: 13px; color: var(--text-muted); }
 
 /* Loan-health composition bar (Portfolio) */
 .lh-bar { display: flex; height: 16px; border-radius: 999px; overflow: hidden; background: var(--gray-light); }

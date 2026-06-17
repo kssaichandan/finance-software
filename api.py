@@ -840,6 +840,26 @@ class API:
         avg_period = (sum(float(r["period_months"]) for r in rows) / total_loans) if total_loans else 0.0
         biggest_loan = max((float(r["loan_amount"]) for r in rows), default=0.0)
 
+        # ── "Settle everything today" (early full closure) ───────────
+        # On an early payoff we only charge interest EARNED UP TO TODAY, by exact
+        # days: each loan's flat interest is prorated by (days elapsed / loan's
+        # total days). Future-term interest is dropped. The per-loan settle amount
+        # is principal + interest-so-far; what's still owed today is that minus
+        # what they've already paid (never negative). "Grand total" = money
+        # already collected + what everyone would pay to close today.
+        clear_today_still = 0.0
+        for s in summaries:
+            full_interest = max(0.0, s.total_payable - s.loan_amount)
+            end = models._add_months(s.loan_date, s.period_months)
+            total_days = (end - s.loan_date).days
+            elapsed = (today - s.loan_date).days
+            frac = 1.0 if total_days <= 0 else min(1.0, max(0.0, elapsed / total_days))
+            settle_total = s.loan_amount + full_interest * frac
+            clear_today_still += max(0.0, settle_total - s.total_paid)
+        clear_today_total = total_collected + clear_today_still
+        # Extra interest you'd earn by letting every loan run to its full term.
+        clear_future_interest = max(0.0, total_payable - clear_today_total)
+
         # Months the user can pick in the selector — every month that has a
         # payment, plus the current month (so it is always selectable), newest
         # first.
@@ -867,6 +887,9 @@ class API:
             "avg_rate": avg_rate,
             "avg_period": avg_period,
             "biggest_loan": biggest_loan,
+            "clear_today_still": clear_today_still,
+            "clear_today_total": clear_today_total,
+            "clear_future_interest": clear_future_interest,
             "this_month": _month_breakdown(this_ym, ratio, pay_rows),
             "available_months": [{"month": m, "label": _month_label(m)} for m in available],
             "monthly": [

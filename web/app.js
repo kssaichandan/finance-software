@@ -3134,12 +3134,13 @@ async function renderPortfolio() {
 
   // ── "If every customer clears their dues" ──
   // Loan money only (principal + interest) — penalties/seizing excluded.
-  const fcAlreadyIn   = p.total_collected || 0;   // already received
-  const fcStillToCome = p.total_outstanding || 0; // remaining to receive
-  const fcGrandTotal  = p.total_payable || 0;      // already + remaining
-  const fcRemainPct   = Math.max(0, 100 - collectedPct);
-  const fcStillOwing  = p.active_loans || 0;       // customers who haven't cleared yet
-  const fcFullyDone   = fcStillToCome <= 0 && fcGrandTotal > 0;
+  const fcCollected   = p.total_collected || 0;        // already received
+  const fcSettleStill = p.clear_today_still || 0;       // to close every loan TODAY
+  const fcSettleTotal = p.clear_today_total || 0;       // collected + settle-still
+  const fcFullTotal   = p.total_payable || 0;            // grand total at full term
+  const fcFutureInt   = p.clear_future_interest || 0;   // interest skipped by settling today
+  const fcStillOwing  = p.active_loans || 0;            // customers who haven't cleared yet
+  const fcFullyDone   = fcSettleStill <= 0 && fcSettleTotal > 0;
 
   // Cache the payload so the month selector can re-render without refetching.
   window._portfolioData = p;
@@ -3226,39 +3227,41 @@ async function renderPortfolio() {
       </div>
     </div>
 
-    <div class="card" style="margin-bottom:16px;border:2px solid var(--primary)">
+    <div class="card fc2-card">
       <div class="card-header"><span class="card-title">💰 If Every Customer Clears Their Dues</span></div>
-      <div class="fc-clear">
-        <div class="fc-clear-item">
-          <div class="stat-label">Already Collected</div>
-          <div class="stat-value success" style="font-size:24px">${money(fcAlreadyIn)}</div>
-          <div class="stat-sub">Money received so far</div>
+      <div class="fc2-grid">
+
+        <div class="fc2-panel today">
+          <div class="fc2-head">🟢 If everyone pays off TODAY</div>
+          <div class="fc2-hero">${money(fcSettleTotal)}</div>
+          <div class="fc2-herosub">total money you'd have in hand</div>
+          <div class="fc2-break">
+            <div class="fc2-bit">
+              <div class="fc2-bit-val">${money(fcCollected)}</div>
+              <div class="fc2-bit-lbl">already in hand</div>
+            </div>
+            <div class="fc2-op">+</div>
+            <div class="fc2-bit">
+              <div class="fc2-bit-val">${money(fcSettleStill)}</div>
+              <div class="fc2-bit-lbl">still to collect</div>
+            </div>
+          </div>
+          <div class="fc2-foot">Early payoff — you don't charge interest for the months not yet used.</div>
         </div>
-        <div class="fc-clear-op">+</div>
-        <div class="fc-clear-item">
-          <div class="stat-label">Still To Receive</div>
-          <div class="stat-value ${fcStillToCome > 0 ? 'danger' : ''}" style="font-size:24px">${money(fcStillToCome)}</div>
-          <div class="stat-sub">Outstanding from all customers</div>
+
+        <div class="fc2-panel fullterm">
+          <div class="fc2-head">📅 If they keep paying till the END</div>
+          <div class="fc2-hero">${money(fcFullTotal)}</div>
+          <div class="fc2-herosub">total money you'd have in hand</div>
+          <div class="fc2-extra">${fcFutureInt > 0 ? `+ ${money(fcFutureInt)} more than paying off today` : 'same as paying off today'}</div>
+          <div class="fc2-foot">The extra is the interest from the remaining months of each loan.</div>
         </div>
-        <div class="fc-clear-op">=</div>
-        <div class="fc-clear-item fc-clear-total">
-          <div class="stat-label">Grand Total In Hand</div>
-          <div class="stat-value" style="font-size:26px;color:var(--success)">${money(fcGrandTotal)}</div>
-          <div class="stat-sub">Once everyone fully clears</div>
-        </div>
+
       </div>
-      <div class="fc-clear-foot">
-        <div class="fc-clear-barhead">
-          <span><strong style="color:var(--success)">${collectedPct}%</strong> collected</span>
-          <span><strong>${fcRemainPct}%</strong> still to come</span>
-        </div>
-        <div class="fc-clear-bar"><div class="fc-clear-bar-fill" style="width:${collectedPct}%"></div></div>
-        <div class="fc-clear-note">
-          ${fcFullyDone
-            ? `🎉 Every customer has cleared their dues. You have received the full <strong>${money(fcGrandTotal)}</strong>.`
-            : `You've already received <strong style="color:var(--success)">${money(fcAlreadyIn)}</strong>. If all <strong>${fcStillOwing}</strong> customer(s) who still owe pay off their balance, another <strong style="color:var(--danger)">${money(fcStillToCome)}</strong> comes in — bringing your total to <strong>${money(fcGrandTotal)}</strong>.`}
-        </div>
-        <div class="fc-clear-hint">Assumes every loan is paid in full (principal + interest). Penalties &amp; seizing costs are not included.</div>
+      <div class="fc2-note">
+        ${fcFullyDone
+          ? `🎉 Everyone has cleared their dues — you've received <strong>${money(fcSettleTotal)}</strong>.`
+          : `<strong>${fcStillOwing}</strong> customer(s) still owe you. Penalties &amp; seizing money are not counted here.`}
       </div>
     </div>
 
