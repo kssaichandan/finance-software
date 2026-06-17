@@ -518,10 +518,7 @@ async function renderSettings() {
       <p style="color:var(--text-muted);font-size:12.5px;margin:12px 0 0">To restore on another PC: close the app, copy your backup file into the app's folder and rename it to <code>finance.db</code>, then start the app.</p>
     </div>`;
 
-  const folderBtns = (detected.folders || []).map(f => {
-    const target = f.path + '\\FinanceTracker Backups';
-    return `<button type="button" class="btn btn-sm btn-outline" data-path="${esc(target)}" onclick="pickAutobackupFolder(this)">📁 ${esc(f.label)}</button>`;
-  }).join('') || '<span style="color:var(--text-muted);font-size:12.5px">No OneDrive / Google Drive folder detected — paste a folder path below.</span>';
+  const folderArea = folderAreaHtml(detected);
 
   const statusLine = (abStatus && abStatus.when)
     ? (abStatus.ok
@@ -543,10 +540,11 @@ async function renderSettings() {
       </label>
       <div class="form-group" style="margin-bottom:10px">
         <label>Backup folder</label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${folderBtns}</div>
+        <div id="ab-folder-area">${folderArea}</div>
+        <button type="button" class="btn btn-sm btn-ghost" style="margin:2px 0 8px" onclick="rescanSyncFolders()">🔄 Re-scan folders</button>
         <input class="form-control" id="ab-dir" value="${esc(s.autobackup_dir || '')}"
           placeholder="e.g. C:\\Users\\you\\OneDrive\\FinanceTracker Backups" />
-        <span class="form-hint">Tip: choose a folder inside OneDrive / Google Drive so it syncs to the cloud.</span>
+        <span class="form-hint">Tip: choose a folder inside OneDrive / Google Drive so it syncs to the cloud. If Google Drive isn't listed, start it and click “Re-scan folders”.</span>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button type="button" class="btn btn-primary" onclick="saveAutobackup()">Save folder</button>
@@ -600,6 +598,10 @@ async function renderSettings() {
       ${setForm}
       ${resetCard}
     </div>`;
+
+  // If Google Drive is installed but its drive hasn't mounted yet, quietly
+  // re-scan while the user sits on this page so the option appears on its own.
+  startGDriveAutoScan(detected);
 
   document.getElementById('set-password-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -676,6 +678,50 @@ async function doBackup() {
 function pickAutobackupFolder(btn) {
   const dir = document.getElementById('ab-dir');
   if (dir) dir.value = btn.dataset.path;
+}
+
+// Build the detected-folder buttons + any "start Google Drive" hint. Shared by
+// the initial Settings render and the Re-scan button so both stay in sync.
+function folderAreaHtml(detected) {
+  const buttons = (detected.folders || []).map(f => {
+    const target = f.path + '\\FinanceTracker Backups';
+    return `<button type="button" class="btn btn-sm btn-outline" data-path="${esc(target)}" onclick="pickAutobackupFolder(this)">📁 ${esc(f.label)}</button>`;
+  }).join('') || '<span style="color:var(--text-muted);font-size:12.5px">No OneDrive / Google Drive folder detected — paste a folder path below, or start your cloud app and click “Re-scan folders”.</span>';
+  // Google Drive's drive only appears after the app starts — guide the user.
+  const hint = (detected.gdrive_installed && !detected.gdrive_mounted)
+    ? `<div class="form-hint" style="color:var(--danger);margin:6px 0 0">⚠ Google Drive is installed but not running yet, so its folder isn't available. Open Google Drive, wait a few seconds for it to start, then click “Re-scan folders”.</div>`
+    : '';
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${buttons}</div>${hint}`;
+}
+
+async function rescanSyncFolders() {
+  let detected = { folders: [] };
+  try { detected = await api('detect_sync_folders'); } catch (_) {}
+  const area = document.getElementById('ab-folder-area');
+  if (area) area.innerHTML = folderAreaHtml(detected);
+  const n = (detected.folders || []).length;
+  if (n) toast(`Found ${n} cloud folder(s).`, 'success');
+  else if (detected.gdrive_installed) toast('Google Drive not running yet — start it, then Re-scan.', 'error');
+  else toast('No cloud folder found. Make sure OneDrive / Google Drive is running.', 'error');
+}
+
+// Auto-rescan loop for the Settings page: only runs while Google Drive is
+// installed-but-not-mounted, and stops itself the moment the drive appears or
+// the user leaves the page. Saves the user from clicking "Re-scan".
+function startGDriveAutoScan(detected) {
+  if (window._abScanTimer) { clearInterval(window._abScanTimer); window._abScanTimer = null; }
+  if (!(detected && detected.gdrive_installed && !detected.gdrive_mounted)) return;
+  window._abScanTimer = setInterval(async () => {
+    const area = document.getElementById('ab-folder-area');
+    if (!area) { clearInterval(window._abScanTimer); window._abScanTimer = null; return; }  // left Settings
+    let d = {};
+    try { d = await api('detect_sync_folders'); } catch (_) { return; }
+    area.innerHTML = folderAreaHtml(d);
+    if (d.gdrive_mounted) {            // it came up — stop polling and nudge the user
+      clearInterval(window._abScanTimer); window._abScanTimer = null;
+      toast('Google Drive is ready now — pick it above.', 'success');
+    }
+  }, 4000);
 }
 
 async function saveAutobackup() {

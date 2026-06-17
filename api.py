@@ -585,7 +585,12 @@ class API:
 
     def detect_sync_folders(self) -> dict:
         """Find likely OneDrive / Google Drive folders so the user can pick one
-        with a click instead of typing a path."""
+        with a click instead of typing a path.
+
+        Google Drive for Desktop only mounts its drive once the app is running,
+        so on a fresh boot the folder can be missing until Google Drive starts.
+        We also report whether Google Drive is installed-but-not-mounted so the
+        UI can prompt the user to start it and re-scan."""
         home = os.path.expanduser("~")
         found, seen = [], set()
 
@@ -594,17 +599,36 @@ class API:
                 seen.add(path.lower())
                 found.append({"label": label, "path": path})
 
+        # OneDrive — personal, plus any "OneDrive - <Company>" business folders.
         add("OneDrive", os.path.join(home, "OneDrive"))
-        add("Google Drive", os.path.join(home, "Google Drive"))
-        for letter in "GHIJKL":
-            add(f"Google Drive ({letter}:)", f"{letter}:\\My Drive")
         try:
             for name in os.listdir(home):
                 if name.lower().startswith("onedrive -"):
                     add(name, os.path.join(home, name))
         except OSError:
             pass
-        return {"folders": found, "home": home}
+
+        # Google Drive — stream mode mounts a virtual drive (default G:, but it
+        # can be any free letter); mirror mode puts a "My Drive" folder under the
+        # profile; old Backup & Sync used "~/Google Drive".
+        add("Google Drive", os.path.join(home, "Google Drive"))
+        add("Google Drive", os.path.join(home, "My Drive"))
+        for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+            add(f"Google Drive ({letter}:)", f"{letter}:\\My Drive")
+
+        gdrive_mounted = any(f["label"].startswith("Google Drive") for f in found)
+        # Drive for Desktop creates this per-user folder once it has been set up,
+        # even when its drive isn't mounted right now — a reliable "installed" cue.
+        gdrive_installed = os.path.isdir(
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "DriveFS")
+        )
+
+        return {
+            "folders": found,
+            "home": home,
+            "gdrive_installed": gdrive_installed,
+            "gdrive_mounted": gdrive_mounted,
+        }
 
     def run_autobackup_now(self) -> dict:
         st = autobackup.backup_now()

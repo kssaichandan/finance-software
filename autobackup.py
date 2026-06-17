@@ -16,11 +16,13 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import db
 
 DEBOUNCE_SECS = 8.0          # wait this long after the last change before backing up
+RETAIN_DAYS = 60             # keep this many daily snapshots; prune older dated copies
+RETRY_SECS = 45.0            # if a backup can't reach the folder, retry this often
 
 _dirty = threading.Event()
 _lock = threading.Lock()
@@ -47,6 +49,26 @@ def status() -> dict:
     return dict(_last_status)
 
 
+def _atomic_replace(tmp: str, path: str, attempts: int = 6) -> None:
+    """os.replace(), but retry when a cloud client (OneDrive / Google Drive) has
+    the destination momentarily locked for upload.
+
+    Those locks are transient — while OneDrive/Drive uploads finance-autobackup.db
+    it holds the file open, and Windows then fails the swap with WinError 5
+    (Access denied) or 32 (in use). A few short retries clear almost all of them.
+    """
+    delay = 0.3
+    for i in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 1.6, 2.0)
+
+
 def _backup_to(src_conn, path: str) -> None:
     """Write a consistent copy of src to `path` atomically."""
     tmp = path + ".tmp"
@@ -56,7 +78,41 @@ def _backup_to(src_conn, path: str) -> None:
             src_conn.backup(dst)
     finally:
         dst.close()
-    os.replace(tmp, path)   # atomic swap — the synced file is never half-written
+    try:
+        _atomic_replace(tmp, path)   # atomic swap — synced file is never half-written
+    except OSError:
+        # Cloud client kept the destination locked through every retry. Don't
+        # leave the half-finished .tmp behind for it to upload as junk.
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _prune_old_dated(dest_dir: str, retain_days: int = RETAIN_DAYS) -> None:
+    """Delete dated snapshots (finance-YYYY-MM-DD.db) older than retain_days.
+    The rolling 'finance-autobackup.db' is never touched. Best-effort: anything
+    we can't parse or delete is simply left alone, so pruning can never fail a
+    backup."""
+    cutoff = date.today() - timedelta(days=retain_days)
+    try:
+        names = os.listdir(dest_dir)
+    except OSError:
+        return
+    for name in names:
+        if not (name.startswith("finance-") and name.endswith(".db")):
+            continue
+        stamp = name[len("finance-"):-len(".db")]   # 'YYYY-MM-DD' for a dated copy
+        try:
+            d = date.fromisoformat(stamp)
+        except ValueError:
+            continue                                 # e.g. 'finance-autobackup.db'
+        if d < cutoff:
+            try:
+                os.remove(os.path.join(dest_dir, name))
+            except OSError:
+                pass
 
 
 def do_backup(dest_dir: str) -> dict:
@@ -70,11 +126,16 @@ def do_backup(dest_dir: str) -> dict:
         src = db.connect()
         try:
             _backup_to(src, latest)
-            if not os.path.exists(dated):
-                _backup_to(src, dated)
+            # Refresh the dated copy every time so it holds the LATEST state of
+            # the day (not just the morning's first save).
+            _backup_to(src, dated)
         finally:
             src.close()
+        _prune_old_dated(dest_dir)   # keep the last RETAIN_DAYS daily snapshots
         return {"ok": True, "path": latest}
+    except PermissionError:
+        return {"ok": False, "error": "Backup folder was busy (OneDrive / Google "
+                "Drive was syncing). It will try again automatically on the next change."}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -123,7 +184,16 @@ def run_worker() -> None:
             _dirty.clear()
             enabled, folder = settings()
             if enabled and folder:
-                _record(do_backup(folder))
+                st = do_backup(folder)
+                _record(st)
+                if not st.get("ok"):
+                    # The folder wasn't reachable — e.g. Google Drive's drive
+                    # isn't mounted yet just after boot. Wait a bit and re-arm so
+                    # the backup completes on its own once the folder reappears;
+                    # the user needn't do anything. (The live DB is safe locally
+                    # in the meantime.)
+                    time.sleep(RETRY_SECS)
+                    _dirty.set()
         except Exception as e:               # never let the worker die
             _record({"ok": False, "error": str(e)})
             time.sleep(5.0)

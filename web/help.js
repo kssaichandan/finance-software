@@ -118,9 +118,22 @@ window.HELP_CONTENT = {
           <li><b>Seizing Money</b> — record repossession / towing / garage costs against a borrower.</li>
           <li><b>🖨 Print</b> — print one borrower's full statement; <b>Export to PDF</b> prints the whole filtered list.</li>
           <li><b>💾 Backup</b> (Settings) — save a full copy of your data to Downloads. Do this often.</li>
+          <li><b>🔄 Auto-backup to cloud</b> (Settings) — after every change, a safe copy is written into your OneDrive / Google Drive folder automatically. Set it up once.</li>
           <li><b>🔐 Delete password</b> (Settings) — require a password before any delete.</li>
           <li><b>Text size</b> (Settings) — make everything bigger.</li>
         </ul>`,
+      },
+      {
+        h: 'Portfolio page',
+        body: `<p>The <b>Portfolio</b> page summarises your whole lending book:</p>
+          <ul>
+            <li><b>If every customer clears their dues</b> — already collected + still to receive =
+              the grand total you'll have once everyone pays in full (loan money only).</li>
+            <li><b>Loan Health</b> — how many loans are On-time / Overdue / Advance / Closed, and how much is still owed in each.</li>
+            <li><b>Key Numbers</b> — average loan size, average interest rate, average period, and your biggest single loan.</li>
+            <li><b>Money Coming In Soon</b> — a cash-flow forecast of what's expected in the next 7 and 30 days.</li>
+            <li><b>Collection trend, interest earned, and per-showroom totals</b> for the months you choose.</li>
+          </ul>`,
       },
       {
         h: 'Backup your data',
@@ -132,6 +145,37 @@ window.HELP_CONTENT = {
           to USB / Google Drive / OneDrive.</p>
           <p><b>To restore on a new computer:</b> place <code>finance.db</code>
           next to a fresh <code>FinanceTracker.exe</code> and run it.</p>`,
+      },
+      {
+        h: 'Auto-backup to cloud (Google Drive / OneDrive)',
+        body: `<p>Go to <b>Settings → 🔄 Auto-backup to cloud</b>. Pick your OneDrive or
+          Google Drive folder (or click a detected one), then turn it <b>On</b>. From then on,
+          a safe copy is written to that folder <b>after every change</b> and your cloud app
+          uploads it — no manual copying.</p>
+          <ul>
+            <li>It keeps <code>finance-autobackup.db</code> (always the latest) plus one dated
+              copy per day for the last 60 days, so you can roll back.</li>
+            <li><b>You set this up once.</b> The folder choice is saved, so you never redo it.</li>
+            <li>If your cloud folder is briefly busy or not mounted yet (e.g. Google Drive hasn't
+              started after boot), the app keeps retrying on its own until it succeeds — your
+              live data is always safe on your PC meanwhile.</li>
+            <li><b>Google Drive not listed?</b> It only appears once Google Drive is running.
+              Start Google Drive, then click <b>🔄 Re-scan folders</b>.</li>
+          </ul>`,
+      },
+      {
+        h: 'Updating to a new version',
+        body: `<p>Your data and <b>all your settings</b> (including the auto-backup folder and
+          password) live inside <code>finance.db</code> — not in the program. So upgrading is safe
+          as long as you keep that file:</p>
+          <ul>
+            <li>Close the app (wait ~20 seconds for it to fully shut down).</li>
+            <li>Extract the new version, then <b>copy your <code>finance.db</code></b> from the old
+              folder into the new one (next to the new <code>FinanceTracker.exe</code>).</li>
+            <li>Run the new <code>FinanceTracker.exe</code> — all borrowers, payments and settings are there.</li>
+          </ul>
+          <p>⚠ <b>Do not delete the old folder before copying <code>finance.db</code> out of it</b> —
+          your data file lives inside it.</p>`,
       },
     ],
   },
