@@ -130,12 +130,12 @@ def compute_summary(borrower_row, today: date | None = None,
     expected_paid_by_today = min(expected_installments * installment, total_payable)
     overdue_amount = expected_paid_by_today - total_paid
 
-    # Days overdue counted from the FIRST missed installment
+    # Days overdue counted from the last covered installment date
     days_overdue = 0
     if overdue_amount > 0.01 and expected_installments > 0:
         for i in range(1, expected_installments + 1):
             if total_paid < i * installment - 0.01:
-                first_missed = _add_months(loan_date, i)
+                first_missed = _add_months(loan_date, i - 1)
                 days_overdue = max(0, (today - first_missed).days)
                 break
 

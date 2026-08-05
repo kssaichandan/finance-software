@@ -221,9 +221,40 @@ def _launch_browser(url):
     webbrowser.open(url)
 
 
+_SINGLE_INSTANCE_SOCKET = None
+
+
+def _acquire_single_instance_lock(port: int = 54123) -> bool:
+    """Ensure only one copy of Finance Tracker runs at a time.
+    Binds a dedicated localhost control socket. If already bound, another instance is running."""
+    global _SINGLE_INSTANCE_SOCKET
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", port))
+        _SINGLE_INSTANCE_SOCKET = s
+        return True
+    except OSError:
+        return False
+
+
 def main():
     import db
     from api import API
+
+    if not _acquire_single_instance_lock():
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Finance Tracker is already running!\n\n"
+                "An instance of Finance Tracker is already open on this computer.\n"
+                "Please check your taskbar or open browser window.",
+                "Finance Tracker - Already Running",
+                0x40,
+            )
+        except Exception:
+            pass
+        sys.exit(0)
 
     try:
         db.init_db()
