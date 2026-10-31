@@ -4,7 +4,7 @@ import csv
 import math
 import os
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import db
@@ -201,6 +201,66 @@ def _summary(s: models.LoanSummary) -> dict:
         "is_advance": s.is_advance,
         "book_ref": s.book_ref,
         "receipts": s.receipts,
+        "last_due_date": _iso(s.last_due_date),
+        "next_due_date": _iso(s.next_due_date),
+        "days_until_next": s.days_until_next,
+        "due_today": s.due_today,
+        "due_today_paid": s.due_today_paid,
+        "first_missed_due": _iso(s.first_missed_due),
+        "days_since_missed": s.days_since_missed,
+        "penalty_state": s.penalty_state,
+    }
+
+
+def _iso(d) -> str | None:
+    return d.strftime("%Y-%m-%d") if d else None
+
+
+def _prev_month(ym: str) -> str:
+    y, m = int(ym[:4]), int(ym[5:7])
+    m -= 1
+    if m == 0:
+        y, m = y - 1, 12
+    return f"{y:04d}-{m:02d}"
+
+
+def _group_breakdown(summaries, key_fn, empty_label: str) -> list:
+    """Per-group totals (showroom / place / vehicle type). Loans, principal and
+    collected cover every loan in the group; running / balance / overdue cover
+    only loans that are still open."""
+    acc: dict[str, dict] = {}
+    for s in summaries:
+        k = (key_fn(s) or "").strip() or empty_label
+        a = acc.setdefault(k, {"name": k, "loans": 0, "principal": 0.0, "collected": 0.0,
+                               "running": 0, "balance": 0.0,
+                               "overdue_count": 0, "overdue_amount": 0.0})
+        a["loans"] += 1
+        a["principal"] += s.loan_amount
+        a["collected"] += s.total_paid
+        if not s.closed:
+            a["running"] += 1
+            a["balance"] += s.remaining
+            if s.is_overdue:
+                a["overdue_count"] += 1
+                a["overdue_amount"] += s.overdue_amount
+    return sorted(acc.values(), key=lambda x: (-x["principal"], x["name"].lower()))
+
+
+def _brief(s: models.LoanSummary) -> dict:
+    """Small borrower card payload for dashboard lists."""
+    return {
+        "borrower_id": s.borrower_id, "name": s.name, "phone": s.phone,
+        "book_ref": s.book_ref, "vehicle_no": s.vehicle_no, "address": s.address,
+        "installment_amount": s.installment_amount, "overdue_amount": s.overdue_amount,
+        "days_overdue": s.days_overdue, "remaining": s.remaining,
+        "is_overdue": s.is_overdue, "status_label": s.status_label,
+        "days_since_missed": s.days_since_missed,
+        "first_missed_due": _iso(s.first_missed_due),
+        "next_due_date": _iso(s.next_due_date), "days_until_next": s.days_until_next,
+        "last_due_date": _iso(s.last_due_date),
+        "due_today_paid": s.due_today_paid,
+        "emis_behind": (s.overdue_amount / s.installment_amount
+                        if s.installment_amount > 0 and s.is_overdue else 0.0),
     }
 
 
@@ -227,6 +287,300 @@ class API:
             "total_loans": total_loans,
             "today": date.today().strftime("%Y-%m-%d"),
         }
+
+    def get_dashboard_overview(self) -> dict:
+        """Everything the Dashboard shows, computed in ONE pass on the server
+        so every screen uses the same date (the PC's local 'today') and the
+        same per-loan figures as the Borrowers list and Portfolio."""
+        today = date.today()
+        t_iso = today.isoformat()
+        y_iso = (today - timedelta(days=1)).isoformat()
+        this_ym = t_iso[:7]
+        last_ym = _prev_month(this_ym)
+        ly, lm = int(last_ym[:4]), int(last_ym[5:7])
+        # "Same point last month" — for a fair month-to-date comparison.
+        last_mtd_end = f"{last_ym}-{min(today.day, calendar.monthrange(ly, lm)[1]):02d}"
+
+        summaries = models.all_summaries(today)
+        active = [s for s in summaries if not s.closed]
+        ratio = _loan_interest_ratios(summaries)
+        pay_rows = db.payment_rows_for_analytics()
+        pen_rows = db.penalty_rows_for_analytics()
+        seiz_rows = db.seizing_rows_for_analytics()
+
+        # ── Money received ───────────────────────────────────────────
+        months12 = _recent_months(today, 12)
+        trend = {m: {"month": m, "label": _month_label(m), "collected": 0.0, "interest": 0.0,
+                     "payments": 0, "new_loans": 0, "new_principal": 0.0,
+                     "penalties": 0.0, "seizings": 0.0} for m in months12}
+        c = {"today": 0.0, "today_n": 0, "yesterday": 0.0, "yesterday_n": 0,
+             "month": 0.0, "month_n": 0, "month_interest": 0.0,
+             "last_month": 0.0, "last_month_interest": 0.0, "last_mtd": 0.0}
+        modes_month: dict[str, float] = {}
+        total_collected = 0.0
+        for r in pay_rows:
+            d = (r["d"] or "")
+            amt = float(r["amount"])
+            interest = amt * ratio.get(r["bid"], 0.0)
+            total_collected += amt
+            ym = d[:7]
+            if d == t_iso:
+                c["today"] += amt
+                c["today_n"] += 1
+            elif d == y_iso:
+                c["yesterday"] += amt
+                c["yesterday_n"] += 1
+            if ym == this_ym:
+                c["month"] += amt
+                c["month_n"] += 1
+                c["month_interest"] += interest
+                mode = (r["mode"] or "").strip() or "Not recorded"
+                modes_month[mode] = modes_month.get(mode, 0.0) + amt
+            elif ym == last_ym:
+                c["last_month"] += amt
+                c["last_month_interest"] += interest
+                if d <= last_mtd_end:
+                    c["last_mtd"] += amt
+            if ym in trend:
+                trend[ym]["collected"] += amt
+                trend[ym]["interest"] += interest
+                trend[ym]["payments"] += 1
+        pen_total = seiz_total = 0.0
+        pen_month = seiz_month = 0.0
+        for r in pen_rows:
+            amt = float(r["amount"])
+            pen_total += amt
+            ym = (r["d"] or "")[:7]
+            if ym == this_ym:
+                pen_month += amt
+            if ym in trend:
+                trend[ym]["penalties"] += amt
+        for r in seiz_rows:
+            amt = float(r["amount"])
+            seiz_total += amt
+            ym = (r["d"] or "")[:7]
+            if ym == this_ym:
+                seiz_month += amt
+            if ym in trend:
+                trend[ym]["seizings"] += amt
+
+        # ── New loans given ──────────────────────────────────────────
+        new_month = {"count": 0, "principal": 0.0}
+        for s in summaries:
+            ym = s.loan_date.strftime("%Y-%m")
+            if ym == this_ym:
+                new_month["count"] += 1
+                new_month["principal"] += s.loan_amount
+            if ym in trend:
+                trend[ym]["new_loans"] += 1
+                trend[ym]["new_principal"] += s.loan_amount
+
+        # ── This month's EMI target (running loans) ──────────────────
+        # Installments whose due date falls inside this calendar month, using
+        # the same schedule + the same "capped at total payable" rule as the
+        # overdue figure.
+        month_start = today.replace(day=1)
+        month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        before_start = month_start - timedelta(days=1)
+        target = target_left = 0.0
+        target_n = 0
+        for s in active:
+            emi, cap, per = s.installment_amount, s.total_payable, s.period_months
+            n0 = models._installments_due_by(s.loan_date, per, before_start)
+            n1 = models._installments_due_by(s.loan_date, per, month_end)
+            nt = models._installments_due_by(s.loan_date, per, today)
+            due_amt = min(n1 * emi, cap) - min(n0 * emi, cap)
+            if due_amt > 0.01:
+                target += due_amt
+                target_n += 1
+                target_left += max(0.0, min(n1 * emi, cap) - min(nt * emi, cap))
+
+        # ── Money position (running loans) ───────────────────────────
+        balance = sum(s.remaining for s in active)
+        # Split each running loan's balance into capital vs interest using the
+        # loan's own interest/payable ratio (same split as "interest earned").
+        capital_out = sum(s.remaining * (1.0 - ratio.get(s.borrower_id, 0.0)) for s in active)
+        interest_earned = sum(s.total_paid * ratio.get(s.borrower_id, 0.0) for s in summaries)
+        total_principal = sum(s.loan_amount for s in summaries)
+
+        # ── Due lists ────────────────────────────────────────────────
+        due_today = sorted((s for s in active if s.due_today),
+                           key=lambda s: (s.due_today_paid, s.name.lower()))
+        due_tomorrow = sorted((s for s in active if s.days_until_next == 1),
+                              key=lambda s: s.name.lower())
+        due_week = sorted((s for s in active if s.days_until_next is not None
+                           and 2 <= s.days_until_next <= 7 and not s.is_overdue),
+                          key=lambda s: (s.days_until_next, s.name.lower()))
+        overdue = sorted((s for s in active if s.is_overdue), key=lambda s: -s.overdue_amount)
+        # Missed an installment in the last 10 days (counted from the missed
+        # installment's own due date; 0 = due today, shown in "Due today").
+        missed_recent = sorted((s for s in overdue if 1 <= s.days_since_missed <= 10),
+                               key=lambda s: s.days_since_missed)
+
+        # ── Overdue ageing (by Days Overdue, as shown everywhere) ────
+        buckets = [
+            {"key": "lt30", "label": "Under 30 days", "min": 0, "max": 29},
+            {"key": "d30", "label": "30 – 59 days", "min": 30, "max": 59},
+            {"key": "d60", "label": "60 – 89 days", "min": 60, "max": 89},
+            {"key": "d90", "label": "90 days or more", "min": 90, "max": None},
+        ]
+        for bk in buckets:
+            sel = [s for s in overdue if s.days_overdue >= bk["min"]
+                   and (bk["max"] is None or s.days_overdue <= bk["max"])]
+            bk["count"] = len(sel)
+            bk["amount"] = sum(s.overdue_amount for s in sel)
+        behind = {"one": 0, "two": 0, "three_plus": 0}
+        for s in overdue:
+            n = s.overdue_amount / s.installment_amount if s.installment_amount > 0 else 0
+            if n <= 1.0 + 1e-9:
+                behind["one"] += 1
+            elif n <= 2.0 + 1e-9:
+                behind["two"] += 1
+            else:
+                behind["three_plus"] += 1
+
+        past_end = sorted((s for s in active if s.penalty_state == "due"),
+                          key=lambda s: -s.remaining)
+        ending_soon = sorted((s for s in active if s.last_due_date
+                              and 0 <= (s.last_due_date - today).days <= 30
+                              and s.remaining > 0.01),
+                             key=lambda s: s.last_due_date)
+        no_payment_yet = [s for s in active if s.total_paid <= 0.001 and s.expected_installments >= 1]
+        seized = [s for s in summaries if s.total_seizings > 0.001]
+        closed_this_month = sum(1 for s in summaries if s.closed and (s.last_payment_date or "")[:7] == this_ym)
+
+        counts = {"overdue": 0, "on_time": 0, "advance": 0, "closed": 0}
+        for s in summaries:
+            if s.closed:
+                counts["closed"] += 1
+            elif s.is_overdue:
+                counts["overdue"] += 1
+            elif s.is_advance:
+                counts["advance"] += 1
+            else:
+                counts["on_time"] += 1
+
+        recent = [{"payment_id": r["id"], "borrower_id": r["borrower_id"], "date": r["d"],
+                   "amount": float(r["amount"]), "mode": r["mode"], "receipt_no": r["receipt_no"],
+                   "name": r["name"], "book_ref": r["book_ref"]}
+                  for r in db.recent_payments(8)]
+
+        return {
+            "today": t_iso,
+            "this_month_label": _month_label(this_ym),
+            "last_month_label": _month_label(last_ym),
+            "has_data": len(summaries) > 0,
+            "counts": {**counts, "total": len(summaries), "active": len(active)},
+            "collected": {**c, "penalties_month": pen_month, "seizings_month": seiz_month,
+                          "all_time": total_collected},
+            "modes_month": sorted(({"mode": k, "amount": v} for k, v in modes_month.items()),
+                                  key=lambda x: -x["amount"]),
+            "target": {"amount": target, "loans": target_n, "left": target_left},
+            "new_loans_month": new_month,
+            "money": {
+                "total_principal": total_principal,
+                "balance": balance,
+                "capital_out": capital_out,
+                "interest_to_come": max(0.0, balance - capital_out),
+                "interest_earned": interest_earned,
+                "penalties": pen_total,
+                "seizings": seiz_total,
+                "net_earned": interest_earned + pen_total - seiz_total,
+                "net_month": c["month_interest"] + pen_month - seiz_month,
+            },
+            "overdue": {
+                "count": len(overdue),
+                "amount": sum(s.overdue_amount for s in overdue),
+                "buckets": buckets,
+                "behind": behind,
+                "top": [_brief(s) for s in overdue[:12]],
+            },
+            "due_today": [_brief(s) for s in due_today],
+            "due_tomorrow": [_brief(s) for s in due_tomorrow],
+            "due_week": [_brief(s) for s in due_week],
+            "due_week_amount": sum(s.installment_amount for s in due_week),
+            "missed_recent": [_brief(s) for s in missed_recent],
+            "past_end": {"count": len(past_end), "amount": sum(s.remaining for s in past_end),
+                         "list": [_brief(s) for s in past_end[:10]]},
+            "ending_soon": {"count": len(ending_soon),
+                            "list": [_brief(s) for s in ending_soon[:10]]},
+            "no_payment_yet": {"count": len(no_payment_yet),
+                               "list": [_brief(s) for s in no_payment_yet[:10]]},
+            "seized_count": len(seized),
+            "closed_this_month": closed_this_month,
+            "trend": [trend[m] for m in months12],
+            "by_showroom": _group_breakdown(summaries, lambda s: s.showroom, "(No showroom)"),
+            "by_place": _group_breakdown(summaries, lambda s: s.address, "(No place)"),
+            "by_vehicle": _group_breakdown(summaries, lambda s: s.vehicle_type, "(Not entered)"),
+            "recent_payments": recent,
+            "backup": {
+                "last_manual": db.get_setting("last_backup_at", ""),
+                "auto_enabled": db.get_setting("autobackup_enabled", "0") == "1",
+                "auto_status": autobackup.status(),
+            },
+        }
+
+    # ---- Collections (day book) -----------------------------------------
+
+    def get_collections(self, date_from: str, date_to: str) -> dict:
+        """Every payment / penalty / seizing entry between two dates
+        (inclusive), with totals. Powers the Collections screen."""
+        if not _valid_iso_date(date_from) or not _valid_iso_date(date_to):
+            return {"success": False, "error": "Please pick a valid date range."}
+        if date_from > date_to:
+            date_from, date_to = date_to, date_from
+        summaries = models.all_summaries()
+        ratio = _loan_interest_ratios(summaries)
+        raw = db.collection_rows(date_from, date_to)
+
+        def base(r, kind):
+            return {"id": r["id"], "kind": kind, "borrower_id": r["borrower_id"],
+                    "date": r["d"], "amount": float(r["amount"]), "name": r["name"],
+                    "book_ref": r["book_ref"], "phone": r["phone"], "showroom": r["showroom"],
+                    "address": r["address"], "notes": r["notes"]}
+
+        rows = []
+        for r in raw["payments"]:
+            x = base(r, "payment")
+            x.update({"receipt_no": r["receipt_no"] or "", "mode": r["mode"],
+                      "installment_label": r["installment_label"],
+                      "pay_showroom": r["pay_showroom"],
+                      "interest": x["amount"] * ratio.get(r["borrower_id"], 0.0)})
+            rows.append(x)
+        for r in raw["penalties"]:
+            x = base(r, "penalty")
+            x.update({"receipt_no": r["receipt_no"] or "", "mode": "", "interest": 0.0})
+            rows.append(x)
+        for r in raw["seizings"]:
+            x = base(r, "seizing")
+            x.update({"receipt_no": "", "mode": "", "interest": 0.0})
+            rows.append(x)
+        rows.sort(key=lambda x: (x["date"], x["id"]), reverse=True)
+        return {"success": True, "from": date_from, "to": date_to, "rows": rows}
+
+    # ---- Generic CSV export (Borrowers list, Collections) ---------------
+
+    def export_rows_csv(self, name: str, headers: list, rows: list) -> dict:
+        """Write a table the screen already shows to a CSV in Downloads (opens
+        in Excel). Cells are formula-injection-safe."""
+        try:
+            safe = "".join(ch for ch in (name or "export") if ch.isalnum() or ch in "-_")[:40] or "export"
+            if not isinstance(headers, list) or not isinstance(rows, list):
+                return {"success": False, "error": "Nothing to export."}
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            downloads = Path(os.path.expanduser("~")) / "Downloads"
+            downloads.mkdir(parents=True, exist_ok=True)
+            path = str(downloads / f"{safe}_{stamp}.csv")
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                w.writerow([_csv_safe(h) for h in headers])
+                for r in rows:
+                    if isinstance(r, list):
+                        w.writerow([v if isinstance(v, (int, float)) and not isinstance(v, bool)
+                                    else _csv_safe(v) for v in r])
+            return {"success": True, "path": path, "count": len(rows)}
+        except OSError as e:
+            return {"success": False, "error": str(e)}
 
     # ---- All Borrowers ---------------------------------------------------
 
@@ -261,6 +615,8 @@ class API:
             "payments": payments,
             "penalties": penalties,
             "seizings": seizings,
+            # Early full-closure amount (same formula as the Portfolio card).
+            "settle": None if s.closed else models.settle_today_amount(s),
         }
 
     # ---- Add / edit borrower ---------------------------------------------
@@ -568,6 +924,7 @@ class API:
             "text_size": db.get_setting("text_size", "normal"),
             "autobackup_enabled": db.get_setting("autobackup_enabled", "0") == "1",
             "autobackup_dir": db.get_setting("autobackup_dir", ""),
+            "last_backup_at": db.get_setting("last_backup_at", ""),
         }
 
     def set_setting(self, key: str, value: str) -> dict:
@@ -667,6 +1024,10 @@ class API:
                     dst.close()
             finally:
                 src.close()
+            try:
+                db.set_setting("last_backup_at", _dt.now().strftime("%Y-%m-%d %H:%M"))
+            except Exception:
+                pass
             return {"success": True, "path": dest}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -720,7 +1081,11 @@ class API:
     def get_portfolio_summary(self) -> dict:
         rows = db.list_borrowers(include_closed=True)
         total_loans = len(rows)
-        active = sum(1 for r in rows if not r["closed"])
+        # v1.38: count from the loan summaries, so a fully-paid loan (closed
+        # automatically) is not reported as "active / still owes you". The DB
+        # `closed` flag alone is only set when a loan is closed by hand.
+        summaries = models.all_summaries()
+        active = sum(1 for s in summaries if not s.closed)
 
         total_principal = sum(float(r["loan_amount"]) for r in rows)
         total_payable = sum(
@@ -740,7 +1105,6 @@ class API:
                 conn.execute("SELECT COALESCE(SUM(amount),0) FROM seizings").fetchone()[0]
             )
 
-        summaries = models.all_summaries()
         overdue_count = sum(1 for s in summaries if s.is_overdue)
         total_overdue_amt = sum(s.overdue_amount for s in summaries if s.is_overdue)
 
@@ -847,18 +1211,19 @@ class API:
         # is principal + interest-so-far; what's still owed today is that minus
         # what they've already paid (never negative). "Grand total" = money
         # already collected + what everyone would pay to close today.
-        clear_today_still = 0.0
-        for s in summaries:
-            full_interest = max(0.0, s.total_payable - s.loan_amount)
-            end = models._add_months(s.loan_date, s.period_months)
-            total_days = (end - s.loan_date).days
-            elapsed = (today - s.loan_date).days
-            frac = 1.0 if total_days <= 0 else min(1.0, max(0.0, elapsed / total_days))
-            settle_total = s.loan_amount + full_interest * frac
-            clear_today_still += max(0.0, settle_total - s.total_paid)
+        # v1.38: only RUNNING loans can still pay — a closed loan (e.g. settled
+        # with a discount) owes nothing more, so it is left out of "still to
+        # collect". Likewise "full term" = money already collected + every
+        # running loan's remaining balance (an over-payment is money in hand,
+        # not a reduction of someone else's dues). With no closed-with-balance
+        # or over-paid loans these equal the old figures exactly.
+        active_s = [s for s in summaries if not s.closed]
+        clear_today_still = sum(models.settle_today_amount(s, today)["still"] for s in active_s)
         clear_today_total = total_collected + clear_today_still
+        active_outstanding = sum(s.remaining for s in active_s)
+        full_term_total = total_collected + active_outstanding
         # Extra interest you'd earn by letting every loan run to its full term.
-        clear_future_interest = max(0.0, total_payable - clear_today_total)
+        clear_future_interest = max(0.0, full_term_total - clear_today_total)
 
         # Months the user can pick in the selector — every month that has a
         # payment, plus the current month (so it is always selectable), newest
@@ -874,7 +1239,11 @@ class API:
             "total_principal": total_principal,
             "total_payable": total_payable,
             "total_collected": total_collected,
-            "total_outstanding": max(0.0, total_payable - total_collected),
+            # Balance still to come from RUNNING loans (sum of each one's
+            # remaining). Was payable − collected over every loan, which let a
+            # closed loan's unpaid balance or an over-payment skew it.
+            "total_outstanding": active_outstanding,
+            "full_term_total": full_term_total,
             "total_penalties": total_penalties,
             "total_seizings": total_seizings,
             "overdue_count": overdue_count,

@@ -60,6 +60,16 @@ class LoanSummary:
     closed: bool
     book_ref: str
     receipts: list
+    # ── Schedule facts (v1.38) — derived from the SAME due-date schedule as
+    # the overdue figures above; they never change any existing number.
+    last_due_date: date | None = None      # date of the final installment
+    next_due_date: date | None = None      # first installment not yet due (running loans)
+    days_until_next: int | None = None
+    due_today: bool = False                # an installment falls due exactly today
+    due_today_paid: bool = False           # ...and it is already covered by payments
+    first_missed_due: date | None = None   # due date of the first unpaid installment
+    days_since_missed: int = 0             # today - first_missed_due (0 if none)
+    penalty_state: str = ""                # "due" (past end, balance left) | "late" (cleared after end) | ""
 
     @property
     def is_overdue(self) -> bool:
@@ -151,6 +161,33 @@ def compute_summary(borrower_row, today: date | None = None,
     auto_paid = total_paid >= total_payable - rounding_tol
     closed = bool(b["closed"]) or (auto_paid and not reopened)
 
+    # ── Schedule facts (read-only extras; see LoanSummary) ─────────────
+    last_due = _add_months(loan_date, period) if period > 0 else loan_date
+    next_due = None
+    days_until_next = None
+    if not closed and expected_installments + 1 <= period:
+        next_due = _add_months(loan_date, expected_installments + 1)
+        days_until_next = (next_due - today).days
+    due_today = (not closed and expected_installments >= 1
+                 and _add_months(loan_date, expected_installments) == today)
+    due_today_paid = due_today and total_paid >= expected_installments * installment - 0.01
+    first_missed = None
+    days_since_missed = 0
+    if overdue_amount > 0.01 and expected_installments > 0:
+        for i in range(1, expected_installments + 1):
+            if total_paid < i * installment - 0.01:
+                first_missed = _add_months(loan_date, i)
+                days_since_missed = max(0, (today - first_missed).days)
+                break
+    last_pay = (last_pays.get(bid) if last_pays is not None
+                else db.last_payment_date(bid))
+    # Same rule as the PENALTY DUE / PAID LATE badge in the borrower screen.
+    penalty_state = ""
+    if not closed and remaining > 0.01 and today > last_due:
+        penalty_state = "due"
+    elif last_pay and last_pay > fmt_date(last_due):
+        penalty_state = "late"
+
     return LoanSummary(
         borrower_id=b["id"],
         name=b["name"] or "",
@@ -176,12 +213,39 @@ def compute_summary(borrower_row, today: date | None = None,
         days_overdue=days_overdue,
         months_elapsed=elapsed,
         expected_installments=expected_installments,
-        last_payment_date=(last_pays.get(bid) if last_pays is not None
-                           else db.last_payment_date(bid)),
+        last_payment_date=last_pay,
         closed=closed,
         book_ref=b["book_ref"] or "",
         receipts=(receipts.get(bid, []) if receipts is not None else []),
+        last_due_date=last_due,
+        next_due_date=next_due,
+        days_until_next=days_until_next,
+        due_today=due_today,
+        due_today_paid=due_today_paid,
+        first_missed_due=first_missed,
+        days_since_missed=days_since_missed,
+        penalty_state=penalty_state,
     )
+
+
+def settle_today_amount(s: "LoanSummary", today: date | None = None) -> dict:
+    """Early full-closure figure for one loan — the SAME formula the Portfolio
+    "If everyone pays off TODAY" card has always used: principal + the loan's
+    flat interest prorated by exact days elapsed / total loan days, minus what
+    is already paid (never negative)."""
+    if today is None:
+        today = date.today()
+    full_interest = max(0.0, s.total_payable - s.loan_amount)
+    end = _add_months(s.loan_date, s.period_months)
+    total_days = (end - s.loan_date).days
+    elapsed = (today - s.loan_date).days
+    frac = 1.0 if total_days <= 0 else min(1.0, max(0.0, elapsed / total_days))
+    settle_total = s.loan_amount + full_interest * frac
+    return {
+        "settle_total": settle_total,
+        "interest_so_far": full_interest * frac,
+        "still": max(0.0, settle_total - s.total_paid),
+    }
 
 
 def _add_months(d: date, n: int) -> date:
@@ -223,8 +287,9 @@ def due_soon(days: int = 7, today: date | None = None) -> list[dict]:
     if today is None:
         today = date.today()
     result = []
-    for b in db.list_borrowers(include_closed=False):
-        s = compute_summary(b, today)
+    # all_summaries() pre-fetches every aggregate in a handful of queries
+    # (was one compute_summary + 4 queries per borrower). Same rows, same order.
+    for s in all_summaries(today):
         if s.closed or s.is_overdue:
             continue
         next_inst_no = s.expected_installments + 1

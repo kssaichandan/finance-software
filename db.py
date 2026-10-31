@@ -414,6 +414,68 @@ def payment_rows_for_analytics() -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def collection_rows(date_from: str, date_to: str) -> dict:
+    """Every payment, penalty and seizing entry dated within [date_from,
+    date_to] (ISO, inclusive), joined to its borrower. Drives the Collections
+    (day-book) screen. ISO date strings compare correctly as text."""
+    with connect() as conn:
+        pays = conn.execute(
+            "SELECT p.id, p.borrower_id, p.payment_date AS d, p.receipt_no, p.amount, "
+            "       COALESCE(p.installment_label, '') AS installment_label, "
+            "       COALESCE(p.payment_mode, '') AS mode, COALESCE(p.showroom, '') AS pay_showroom, "
+            "       COALESCE(p.notes, '') AS notes, b.name, COALESCE(b.book_ref, '') AS book_ref, "
+            "       COALESCE(b.phone, '') AS phone, COALESCE(b.showroom, '') AS showroom, "
+            "       COALESCE(b.address, '') AS address "
+            "FROM payments p JOIN borrowers b ON b.id = p.borrower_id "
+            "WHERE p.payment_date >= ? AND p.payment_date <= ? "
+            "ORDER BY p.payment_date DESC, p.id DESC",
+            (date_from, date_to)).fetchall()
+        pens = conn.execute(
+            "SELECT p.id, p.borrower_id, p.charge_date AS d, p.receipt_no, p.amount, "
+            "       COALESCE(p.notes, '') AS notes, b.name, COALESCE(b.book_ref, '') AS book_ref, "
+            "       COALESCE(b.phone, '') AS phone, COALESCE(b.showroom, '') AS showroom, "
+            "       COALESCE(b.address, '') AS address "
+            "FROM penalties p JOIN borrowers b ON b.id = p.borrower_id "
+            "WHERE p.charge_date >= ? AND p.charge_date <= ? "
+            "ORDER BY p.charge_date DESC, p.id DESC",
+            (date_from, date_to)).fetchall()
+        seiz = conn.execute(
+            "SELECT s.id, s.borrower_id, s.seizing_date AS d, s.amount, "
+            "       COALESCE(s.reason, '') AS notes, b.name, COALESCE(b.book_ref, '') AS book_ref, "
+            "       COALESCE(b.phone, '') AS phone, COALESCE(b.showroom, '') AS showroom, "
+            "       COALESCE(b.address, '') AS address "
+            "FROM seizings s JOIN borrowers b ON b.id = s.borrower_id "
+            "WHERE s.seizing_date >= ? AND s.seizing_date <= ? "
+            "ORDER BY s.seizing_date DESC, s.id DESC",
+            (date_from, date_to)).fetchall()
+    return {"payments": pays, "penalties": pens, "seizings": seiz}
+
+
+def recent_payments(limit: int = 8) -> list[sqlite3.Row]:
+    """The most recently ENTERED payments (newest id first), with borrower name."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT p.id, p.borrower_id, p.payment_date AS d, p.amount, "
+            "       COALESCE(p.payment_mode, '') AS mode, COALESCE(p.receipt_no, '') AS receipt_no, "
+            "       b.name, COALESCE(b.book_ref, '') AS book_ref "
+            "FROM payments p JOIN borrowers b ON b.id = p.borrower_id "
+            "ORDER BY p.id DESC LIMIT ?", (int(limit),)).fetchall()
+
+
+def penalty_rows_for_analytics() -> list[sqlite3.Row]:
+    """(date, amount) of every penalty — for month-by-month trends."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT charge_date AS d, amount FROM penalties").fetchall()
+
+
+def seizing_rows_for_analytics() -> list[sqlite3.Row]:
+    """(date, amount) of every seizing entry — for month-by-month trends."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT seizing_date AS d, amount FROM seizings").fetchall()
+
+
 def distinct_payment_months() -> list[str]:
     """Distinct 'YYYY-MM' months that have at least one payment, newest first.
     Used to populate the Portfolio month selector."""

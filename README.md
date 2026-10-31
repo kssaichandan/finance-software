@@ -37,6 +37,13 @@ A fresh empty `finance.db` is created on first run, in the same folder as the `.
 
 ## Features
 
+- **Dashboard with 4 tabs** — *Today* (collected today, due today / this week, missed recently, payments just entered), *Business Overview* (money lent, collected, balance to collect, capital vs interest still out, profit & net earnings, this month vs last month, 12-month charts, payment modes, loan health), *Overdue & Risk* (overdue ageing, EMIs behind, biggest dues, loans past their period, ending soon, never paid) and *Showroom & Area* (business by showroom / place / vehicle type). Every box clicks through to the exact borrowers behind it.
+- **₹ Record Payment from anywhere** — search the borrower, pick, one-click "Use EMI" / "Full overdue" amount
+- **Live borrower search** in the sidebar (name, phone, vehicle, book no)
+- **Collections (day book)** — every payment / penalty / seizing entry for any date range, totals by mode and by day, Excel export and print
+- Borrowers list: one-click quick filters, balance & next-due columns, totals of what is shown, Excel (CSV) export of the shown list
+- Borrower screen: Balance left, Overdue, Next installment and **To close today** (early-settlement amount)
+- Backup reminder on the Dashboard when no backup has been taken for 7 days
 - Add borrowers with full loan, vehicle, and guarantor details (incl. alternate phones)
 - Record installment payments and overdue (O/D) penalty charges
 - **Annual interest prorated by months** (see formula below)

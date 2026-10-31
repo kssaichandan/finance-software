@@ -786,3 +786,64 @@ window.HELP_CONTENT = {
     ],
   },
 };
+
+// ── v1.38: new screens (Dashboard tabs, Record Payment, Collections) ──
+// Inserted as the 2nd section of every language so it is seen first.
+(function addV138Help() {
+  const S = {
+    en: { h: '⭐ Easiest way to use the app (new)', body: `<ul>
+      <li><b>₹ Record Payment</b> (big green button, top-left) — type the borrower's name, phone, vehicle or book number, pick them, enter the amount (or click <b>Use EMI</b>) and press <b>Save Payment</b>.</li>
+      <li><b>🔍 Find borrower</b> (left side) — results appear while you type. Click one to open it.</li>
+      <li><b>Dashboard</b> has 4 tabs: <b>Today</b> (who pays today / this week, who missed), <b>Business Overview</b> (money lent, collected, profit, this month vs last month, 12-month charts), <b>Overdue &amp; Risk</b> (how long money is pending, biggest dues, loans whose period is over) and <b>Showroom &amp; Area</b> (business by showroom, village and vehicle type).</li>
+      <li>Every coloured box with <b>View →</b> can be clicked — it opens the exact list of borrowers behind that number.</li>
+      <li><b>🧾 Collections</b> — the day book: every payment received on any day or date range, totals by Cash / PhonePe / Scanner, day-by-day totals, Excel and Print.</li>
+      <li><b>Borrowers</b> — one-click buttons on top: Running, Overdue, Due today, Due in 7 days, Period over, Paid ahead, Closed. The bar above the table shows the totals of what you see. <b>⬇ Excel</b> saves that list.</li>
+      <li>Open a borrower to see 4 big numbers: <b>Balance left</b>, <b>Overdue</b>, <b>Next installment</b> and <b>To close today</b> (the amount to settle the whole loan today).</li></ul>` },
+    hi: { h: '⭐ ऐप इस्तेमाल करने का सबसे आसान तरीका (नया)', body: `<ul>
+      <li><b>₹ Record Payment</b> (ऊपर बाईं ओर हरा बटन) — ग्राहक का नाम, फ़ोन, वाहन या बुक नंबर लिखें, उन्हें चुनें, रकम डालें (या <b>Use EMI</b> दबाएँ) और <b>Save Payment</b> दबाएँ।</li>
+      <li><b>🔍 Find borrower</b> — लिखते ही नतीजे दिखते हैं, क्लिक करके खोलें।</li>
+      <li><b>Dashboard</b> में 4 टैब: <b>Today</b> (आज/इस हफ़्ते किसे देना है, किसने चूका), <b>Business Overview</b> (दिया गया पैसा, वसूली, मुनाफ़ा, इस महीने बनाम पिछला महीना), <b>Overdue &amp; Risk</b> और <b>Showroom &amp; Area</b>।</li>
+      <li><b>View →</b> वाले हर बॉक्स पर क्लिक करें — उस संख्या के पीछे के ग्राहक दिखेंगे।</li>
+      <li><b>🧾 Collections</b> — रोज़ की बही: किसी भी दिन/तारीख़ों की सारी वसूली, Cash / PhonePe / Scanner के अनुसार जोड़, Excel और Print।</li>
+      <li>ग्राहक खोलने पर 4 बड़े अंक: <b>बाकी रकम</b>, <b>बकाया</b>, <b>अगली किस्त</b> और <b>आज बंद करने की रकम</b>।</li></ul>` },
+    kn: { h: '⭐ ಆ್ಯಪ್ ಬಳಸುವ ಸುಲಭ ವಿಧಾನ (ಹೊಸದು)', body: `<ul>
+      <li><b>₹ Record Payment</b> (ಮೇಲೆ ಎಡಭಾಗದ ಹಸಿರು ಬಟನ್) — ಗ್ರಾಹಕರ ಹೆಸರು, ಫೋನ್, ವಾಹನ ಅಥವಾ ಬುಕ್ ನಂಬರ್ ಟೈಪ್ ಮಾಡಿ, ಆಯ್ಕೆ ಮಾಡಿ, ಮೊತ್ತ ಹಾಕಿ (ಅಥವಾ <b>Use EMI</b>) ಮತ್ತು <b>Save Payment</b> ಒತ್ತಿ.</li>
+      <li><b>🔍 Find borrower</b> — ಟೈಪ್ ಮಾಡುತ್ತಿದ್ದಂತೆ ಫಲಿತಾಂಶ ಕಾಣುತ್ತದೆ.</li>
+      <li><b>Dashboard</b> ನಲ್ಲಿ 4 ಟ್ಯಾಬ್: <b>Today</b>, <b>Business Overview</b> (ಕೊಟ್ಟ ಹಣ, ವಸೂಲಿ, ಲಾಭ, ಈ ತಿಂಗಳು vs ಕಳೆದ ತಿಂಗಳು), <b>Overdue &amp; Risk</b>, <b>Showroom &amp; Area</b>.</li>
+      <li><b>View →</b> ಇರುವ ಪ್ರತಿಯೊಂದು ಬಾಕ್ಸ್ ಕ್ಲಿಕ್ ಮಾಡಿದರೆ ಆ ಗ್ರಾಹಕರ ಪಟ್ಟಿ ತೆರೆಯುತ್ತದೆ.</li>
+      <li><b>🧾 Collections</b> — ದಿನದ ಪುಸ್ತಕ: ಯಾವುದೇ ದಿನದ ಎಲ್ಲಾ ವಸೂಲಿ, Cash / PhonePe / Scanner ಮೊತ್ತ, Excel ಮತ್ತು Print.</li>
+      <li>ಗ್ರಾಹಕರನ್ನು ತೆರೆದಾಗ 4 ದೊಡ್ಡ ಸಂಖ್ಯೆಗಳು: <b>ಬಾಕಿ</b>, <b>ಓವರ್‌ಡ್ಯೂ</b>, <b>ಮುಂದಿನ ಕಂತು</b>, <b>ಇಂದು ಮುಚ್ಚಲು ಮೊತ್ತ</b>.</li></ul>` },
+    te: { h: '⭐ యాప్ వాడటానికి సులభమైన మార్గం (కొత్తది)', body: `<ul>
+      <li><b>₹ Record Payment</b> (పై ఎడమ వైపు ఆకుపచ్చ బటన్) — రుణగ్రహీత పేరు, ఫోన్, వాహనం లేదా బుక్ నంబర్ టైప్ చేసి, ఎంచుకుని, మొత్తం వేసి (లేదా <b>Use EMI</b>) <b>Save Payment</b> నొక్కండి.</li>
+      <li><b>🔍 Find borrower</b> — టైప్ చేస్తుండగానే ఫలితాలు కనిపిస్తాయి.</li>
+      <li><b>Dashboard</b> లో 4 ట్యాబ్‌లు: <b>Today</b>, <b>Business Overview</b>, <b>Overdue &amp; Risk</b>, <b>Showroom &amp; Area</b>.</li>
+      <li><b>View →</b> ఉన్న ప్రతి బాక్స్‌ను నొక్కితే ఆ రుణగ్రహీతల జాబితా తెరుచుకుంటుంది.</li>
+      <li><b>🧾 Collections</b> — రోజువారీ పుస్తకం: ఏ రోజైనా వచ్చిన అన్ని చెల్లింపులు, Cash / PhonePe / Scanner మొత్తాలు, Excel, Print.</li>
+      <li>రుణగ్రహీతను తెరిచినప్పుడు 4 పెద్ద సంఖ్యలు: <b>మిగిలిన బాకీ</b>, <b>ఓవర్‌డ్యూ</b>, <b>తదుపరి వాయిదా</b>, <b>ఈరోజు మూసివేయడానికి మొత్తం</b>.</li></ul>` },
+    ta: { h: '⭐ ஆப்பை எளிதாக பயன்படுத்தும் வழி (புதியது)', body: `<ul>
+      <li><b>₹ Record Payment</b> (மேல் இடது பச்சை பொத்தான்) — கடன் பெற்றவரின் பெயர், போன், வாகன எண் அல்லது புத்தக எண்ணை தட்டச்சு செய்து, தேர்வு செய்து, தொகையை இட்டு (அல்லது <b>Use EMI</b>) <b>Save Payment</b> அழுத்தவும்.</li>
+      <li><b>🔍 Find borrower</b> — தட்டச்சு செய்யும்போதே முடிவுகள் தெரியும்.</li>
+      <li><b>Dashboard</b> இல் 4 தாவல்கள்: <b>Today</b>, <b>Business Overview</b>, <b>Overdue &amp; Risk</b>, <b>Showroom &amp; Area</b>.</li>
+      <li><b>View →</b> உள்ள ஒவ்வொரு பெட்டியையும் அழுத்தினால் அந்த நபர்களின் பட்டியல் திறக்கும்.</li>
+      <li><b>🧾 Collections</b> — தினசரி கணக்கு புத்தகம்: எந்த நாளின் அனைத்து வசூல், Cash / PhonePe / Scanner மொத்தம், Excel, Print.</li>
+      <li>ஒருவரைத் திறந்தால் 4 பெரிய எண்கள்: <b>மீதி</b>, <b>நிலுவை</b>, <b>அடுத்த தவணை</b>, <b>இன்று முடிக்க தொகை</b>.</li></ul>` },
+    ml: { h: '⭐ ആപ്പ് ഉപയോഗിക്കാനുള്ള എളുപ്പവഴി (പുതിയത്)', body: `<ul>
+      <li><b>₹ Record Payment</b> (മുകളിൽ ഇടത് പച്ച ബട്ടൺ) — വായ്പക്കാരന്റെ പേര്, ഫോൺ, വാഹനം അല്ലെങ്കിൽ ബുക്ക് നമ്പർ ടൈപ്പ് ചെയ്ത്, തിരഞ്ഞെടുത്ത്, തുക നൽകി (അല്ലെങ്കിൽ <b>Use EMI</b>) <b>Save Payment</b> അമർത്തുക.</li>
+      <li><b>🔍 Find borrower</b> — ടൈപ്പ് ചെയ്യുമ്പോൾ തന്നെ ഫലങ്ങൾ കാണാം.</li>
+      <li><b>Dashboard</b> ൽ 4 ടാബുകൾ: <b>Today</b>, <b>Business Overview</b>, <b>Overdue &amp; Risk</b>, <b>Showroom &amp; Area</b>.</li>
+      <li><b>View →</b> ഉള്ള ഓരോ ബോക്സിലും ക്ലിക്ക് ചെയ്താൽ ആ ആളുകളുടെ പട്ടിക തുറക്കും.</li>
+      <li><b>🧾 Collections</b> — ദിവസ പുസ്തകം: ഏത് ദിവസത്തെയും എല്ലാ പിരിവുകൾ, Cash / PhonePe / Scanner തുക, Excel, Print.</li>
+      <li>ഒരാളെ തുറന്നാൽ 4 വലിയ സംഖ്യകൾ: <b>ബാക്കി</b>, <b>കുടിശ്ശിക</b>, <b>അടുത്ത തവണ</b>, <b>ഇന്ന് അടയ്ക്കാനുള്ള തുക</b>.</li></ul>` },
+    mr: { h: '⭐ ॲप वापरण्याची सर्वात सोपी पद्धत (नवीन)', body: `<ul>
+      <li><b>₹ Record Payment</b> (वर डावीकडे हिरवे बटण) — कर्जदाराचे नाव, फोन, वाहन किंवा बुक नंबर टाइप करा, निवडा, रक्कम भरा (किंवा <b>Use EMI</b>) आणि <b>Save Payment</b> दाबा.</li>
+      <li><b>🔍 Find borrower</b> — टाइप करताच निकाल दिसतात.</li>
+      <li><b>Dashboard</b> मध्ये 4 टॅब: <b>Today</b>, <b>Business Overview</b>, <b>Overdue &amp; Risk</b>, <b>Showroom &amp; Area</b>.</li>
+      <li><b>View →</b> असलेल्या प्रत्येक बॉक्सवर क्लिक केल्यास त्या कर्जदारांची यादी उघडते.</li>
+      <li><b>🧾 Collections</b> — रोजची वही: कोणत्याही दिवसाची सर्व वसुली, Cash / PhonePe / Scanner बेरीज, Excel, Print.</li>
+      <li>कर्जदार उघडल्यावर 4 मोठे आकडे: <b>उरलेली रक्कम</b>, <b>थकबाकी</b>, <b>पुढचा हप्ता</b>, <b>आज कर्ज बंद करण्याची रक्कम</b>.</li></ul>` },
+  };
+  const C = window.HELP_CONTENT || {};
+  for (const k of Object.keys(S)) {
+    if (C[k] && Array.isArray(C[k].sections)) C[k].sections.splice(1, 0, S[k]);
+  }
+})();
