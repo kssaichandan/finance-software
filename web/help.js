@@ -786,3 +786,59 @@ window.HELP_CONTENT = {
     ],
   },
 };
+
+// ── 1.37 Extended: search by key / engine / chassis / serial no + extras ──
+// Inserted as the 2nd section of every language so it is seen first.
+(function addExtendedHelp() {
+  const S = {
+    en: { h: '🔑 New in 1.37 Extended', body: `<ul>
+      <li><b>Search by Key No, Engine No, Chassis No or Serial No</b> — type it in the Borrowers search box or the <b>Find borrower</b> box on the left (press Enter). Alternate and guarantor phone numbers work too. When a borrower is found by one of these, it is shown under the name (e.g. <b>🔑 Key: K5012</b>).</li>
+      <li><b>Due Today</b> on the Dashboard now really shows who must pay today, and marks those who already paid with <b>✓ Paid today</b>.</li>
+      <li><b>Missed — Last 10 Days</b> now lists people whose installment date passed in the last 10 days.</li>
+      <li><b>Add Payment</b> shows the borrower's EMI and overdue, with <b>Use EMI</b> / <b>Full overdue</b> buttons to fill the amount.</li>
+      <li>Borrower screen shows <b>To Close Loan Today</b> — the amount to settle the whole loan today.</li>
+      <li><b>⬇ Excel</b> on the Borrowers page saves the list you see (or the ticked rows) to Downloads.</li>
+      <li>When saving a loan, the app warns if the same <b>Vehicle / Engine / Chassis No</b> is already saved for another borrower.</li>
+      <li>Settings shows when you last took a backup.</li></ul>` },
+    hi: { h: '🔑 1.37 Extended में नया', body: `<ul>
+      <li><b>Key No, Engine No, Chassis No या Serial No से खोजें</b> — Borrowers के सर्च बॉक्स या बाईं ओर <b>Find borrower</b> में लिखें (Enter दबाएँ)। दूसरा फ़ोन और गारंटर का फ़ोन भी चलता है।</li>
+      <li>Dashboard पर <b>Due Today</b> अब आज देने वालों को दिखाता है; जिन्होंने दे दिया उन पर <b>✓ Paid today</b>।</li>
+      <li><b>Add Payment</b> में EMI और बकाया दिखता है, <b>Use EMI</b> बटन से रकम भरें।</li>
+      <li>ग्राहक स्क्रीन पर <b>To Close Loan Today</b> — आज पूरा ऋण बंद करने की रकम।</li>
+      <li>Borrowers पेज पर <b>⬇ Excel</b> से सूची Downloads में सेव होती है।</li></ul>` },
+    kn: { h: '🔑 1.37 Extended ನಲ್ಲಿ ಹೊಸದು', body: `<ul>
+      <li><b>Key No, Engine No, Chassis No ಅಥವಾ Serial No ಮೂಲಕ ಹುಡುಕಿ</b> — Borrowers ಹುಡುಕಾಟ ಬಾಕ್ಸ್ ಅಥವಾ ಎಡಭಾಗದ <b>Find borrower</b> ನಲ್ಲಿ ಟೈಪ್ ಮಾಡಿ (Enter). ಎರಡನೇ ಫೋನ್ ಮತ್ತು ಜಾಮೀನುದಾರರ ಫೋನ್ ಕೂಡ ಆಗುತ್ತದೆ.</li>
+      <li>Dashboard ನ <b>Due Today</b> ಈಗ ಇಂದು ಕಟ್ಟಬೇಕಾದವರನ್ನು ತೋರಿಸುತ್ತದೆ; ಕಟ್ಟಿದವರಿಗೆ <b>✓ Paid today</b>.</li>
+      <li><b>Add Payment</b> ನಲ್ಲಿ EMI ಮತ್ತು ಬಾಕಿ ಕಾಣುತ್ತದೆ, <b>Use EMI</b> ಬಟನ್.</li>
+      <li>ಗ್ರಾಹಕರ ಪರದೆಯಲ್ಲಿ <b>To Close Loan Today</b> — ಇಂದು ಸಾಲ ಮುಚ್ಚಲು ಮೊತ್ತ.</li>
+      <li>Borrowers ಪುಟದಲ್ಲಿ <b>⬇ Excel</b> — ಪಟ್ಟಿಯನ್ನು Downloads ಗೆ ಉಳಿಸುತ್ತದೆ.</li></ul>` },
+    te: { h: '🔑 1.37 Extended లో కొత్తవి', body: `<ul>
+      <li><b>Key No, Engine No, Chassis No లేదా Serial No తో వెతకండి</b> — Borrowers సెర్చ్ బాక్స్‌లో లేదా ఎడమవైపు <b>Find borrower</b> లో టైప్ చేయండి (Enter). రెండవ ఫోన్, హామీదారుని ఫోన్ కూడా పనిచేస్తాయి.</li>
+      <li>Dashboard లో <b>Due Today</b> ఇప్పుడు ఈరోజు కట్టవలసిన వారిని చూపిస్తుంది; కట్టిన వారికి <b>✓ Paid today</b>.</li>
+      <li><b>Add Payment</b> లో EMI, బాకీ కనిపిస్తాయి; <b>Use EMI</b> బటన్.</li>
+      <li>రుణగ్రహీత స్క్రీన్‌లో <b>To Close Loan Today</b> — ఈరోజు రుణం మూసివేయడానికి మొత్తం.</li>
+      <li>Borrowers పేజీలో <b>⬇ Excel</b> — జాబితాను Downloads లో సేవ్ చేస్తుంది.</li></ul>` },
+    ta: { h: '🔑 1.37 Extended இல் புதியவை', body: `<ul>
+      <li><b>Key No, Engine No, Chassis No அல்லது Serial No மூலம் தேடுங்கள்</b> — Borrowers தேடல் பெட்டியில் அல்லது இடது பக்க <b>Find borrower</b> இல் தட்டச்சு செய்யவும் (Enter). மாற்று போன், ஜாமீன்தாரர் போன் கூட வேலை செய்யும்.</li>
+      <li>Dashboard இல் <b>Due Today</b> இப்போது இன்று செலுத்த வேண்டியவர்களைக் காட்டுகிறது; செலுத்தியவர்களுக்கு <b>✓ Paid today</b>.</li>
+      <li><b>Add Payment</b> இல் EMI, நிலுவை தெரியும்; <b>Use EMI</b> பொத்தான்.</li>
+      <li>கடன் பெற்றவர் திரையில் <b>To Close Loan Today</b> — இன்று கடனை முடிக்க தொகை.</li>
+      <li>Borrowers பக்கத்தில் <b>⬇ Excel</b> — பட்டியலை Downloads இல் சேமிக்கும்.</li></ul>` },
+    ml: { h: '🔑 1.37 Extended ൽ പുതിയത്', body: `<ul>
+      <li><b>Key No, Engine No, Chassis No അല്ലെങ്കിൽ Serial No ഉപയോഗിച്ച് തിരയുക</b> — Borrowers തിരയൽ ബോക്സിലോ ഇടത് വശത്തെ <b>Find borrower</b> ലോ ടൈപ്പ് ചെയ്യുക (Enter). രണ്ടാം ഫോൺ, ജാമ്യക്കാരന്റെ ഫോൺ എന്നിവയും പ്രവർത്തിക്കും.</li>
+      <li>Dashboard ലെ <b>Due Today</b> ഇപ്പോൾ ഇന്ന് അടയ്ക്കേണ്ടവരെ കാണിക്കുന്നു; അടച്ചവർക്ക് <b>✓ Paid today</b>.</li>
+      <li><b>Add Payment</b> ൽ EMI, കുടിശ്ശിക കാണാം; <b>Use EMI</b> ബട്ടൺ.</li>
+      <li>വായ്പക്കാരന്റെ സ്ക്രീനിൽ <b>To Close Loan Today</b> — ഇന്ന് വായ്പ അടയ്ക്കാനുള്ള തുക.</li>
+      <li>Borrowers പേജിൽ <b>⬇ Excel</b> — പട്ടിക Downloads ൽ സേവ് ചെയ്യും.</li></ul>` },
+    mr: { h: '🔑 1.37 Extended मध्ये नवीन', body: `<ul>
+      <li><b>Key No, Engine No, Chassis No किंवा Serial No ने शोधा</b> — Borrowers शोध बॉक्समध्ये किंवा डावीकडील <b>Find borrower</b> मध्ये टाइप करा (Enter). दुसरा फोन आणि जामीनदाराचा फोनही चालतो.</li>
+      <li>Dashboard वरील <b>Due Today</b> आता आज भरणाऱ्यांना दाखवतो; भरलेल्यांवर <b>✓ Paid today</b>.</li>
+      <li><b>Add Payment</b> मध्ये EMI आणि थकबाकी दिसते; <b>Use EMI</b> बटण.</li>
+      <li>कर्जदार स्क्रीनवर <b>To Close Loan Today</b> — आज कर्ज बंद करण्याची रक्कम.</li>
+      <li>Borrowers पानावर <b>⬇ Excel</b> — यादी Downloads मध्ये सेव्ह होते.</li></ul>` },
+  };
+  const C = window.HELP_CONTENT || {};
+  for (const k of Object.keys(S)) {
+    if (C[k] && Array.isArray(C[k].sections)) C[k].sections.splice(1, 0, S[k]);
+  }
+})();

@@ -37,6 +37,7 @@ A fresh empty `finance.db` is created on first run, in the same folder as the `.
 
 ## Features
 
+- **1.37 Extended:** search by **Key No, Engine No, Chassis No, Serial No**, alternate and guarantor phones (Borrowers search + sidebar search); Dashboard *Due Today* and *Missed — Last 10 Days* fixed; *Use EMI* button in Add Payment; *To Close Loan Today* amount; Excel export of the Borrowers list; duplicate vehicle / engine / chassis warning
 - Add borrowers with full loan, vehicle, and guarantor details (incl. alternate phones)
 - Record installment payments and overdue (O/D) penalty charges
 - **Annual interest prorated by months** (see formula below)

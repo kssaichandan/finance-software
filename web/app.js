@@ -34,6 +34,10 @@ let filters = defaultFilters();
 // operators + value input are shown. All keys must exist on a summary object.
 const CUSTOM_FIELDS = [
   { key: 'name',              label: 'Name',                type: 'text' },
+  { key: 'key_no',            label: 'Key no',              type: 'text' },
+  { key: 'engine_no',         label: 'Engine no',           type: 'text' },
+  { key: 'chassis_no',        label: 'Chassis no',          type: 'text' },
+  { key: 'serial_no',         label: 'Serial no (S.No)',    type: 'text' },
   { key: 'father_name',       label: 'Father name',         type: 'text' },
   { key: 'guarantor_name',    label: 'Guarantor name',      type: 'text' },
   { key: 'address',           label: 'Place / address',     type: 'text' },
@@ -41,6 +45,8 @@ const CUSTOM_FIELDS = [
   { key: 'vehicle_type',      label: 'Vehicle type',        type: 'text' },
   { key: 'vehicle_no',        label: 'Vehicle no',          type: 'text' },
   { key: 'phone',             label: 'Phone',               type: 'text' },
+  { key: 'phone2',            label: 'Alternate phone',     type: 'text' },
+  { key: 'guarantor_phone',   label: 'Guarantor phone',     type: 'text' },
   { key: 'book_ref',          label: 'Book / S.No',         type: 'text' },
   { key: 'loan_amount',       label: 'Loan amount (₹)',     type: 'number' },
   { key: 'total_payable',     label: 'Total payable (₹)',   type: 'number' },
@@ -265,10 +271,35 @@ function jsAddMonths(dateStr, n) {
 }
 
 function nextDueDateFor(s) {
+  if (s.next_due_date !== undefined) return s.next_due_date;   // server-computed (1.37 Extended)
   if (s.closed) return null;
   const next = s.expected_installments + 1;
   if (next > s.period_months) return null;
   return jsAddMonths(s.loan_date, next);
+}
+
+// Today as YYYY-MM-DD in the PC's LOCAL time zone. (toISOString() is UTC, so
+// between midnight and 5:30 AM in India it used to return YESTERDAY.)
+function localISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function todayISO() { return localISO(new Date()); }
+// Whole days from `fromIso` to `toIso` (both YYYY-MM-DD).
+function daysBetween(fromIso, toIso) {
+  const [a, b, c] = fromIso.split('-').map(Number);
+  const [x, y, z] = toIso.split('-').map(Number);
+  return Math.round((Date.UTC(x, y - 1, z) - Date.UTC(a, b - 1, c)) / 86400000);
+}
+// Days until this borrower's next installment: 0 when one falls due TODAY,
+// otherwise days to the next not-yet-due one; null when nothing is left due.
+// (Before, "due today" could never match — the next not-yet-due installment
+// is always after today — so the Due-today list and filter stayed empty.)
+function daysUntilDue(s, today) {
+  if (s.closed) return null;
+  if (s.due_today) return 0;
+  const nd = nextDueDateFor(s);
+  if (!nd) return null;
+  return daysBetween(today || todayISO(), nd);
 }
 
 // Whole months from one YYYY-MM-DD date to another (same day-of-month rule).
@@ -325,9 +356,10 @@ function showroomDatalistHtml(id) {
 // running past its period with money owed) or PAID LATE (cleared after the
 // loan period). Same logic as the badge shown in the borrower detail page.
 function hasPenalty(s) {
+  if (s.penalty_state !== undefined) return !!s.penalty_state;   // server-computed
   if (!s.loan_date || !s.period_months) return false;
   const lastDue = jsAddMonths(s.loan_date, s.period_months);
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = todayISO();
   if (!s.closed && s.remaining > 0.01 && todayStr > lastDue) return true;   // PENALTY DUE
   if (s.last_payment_date && s.last_payment_date > lastDue) return true;    // PAID LATE
   return false;
@@ -377,7 +409,14 @@ function globalSearchGo(v) {
 }
 
 // ── Navigation ───────────────────────────────────────────────────
+// Each navigation gets a number. A screen that finishes loading after the
+// user has already moved on (e.g. a background refresh after closing a
+// popup) must not paint over the newer screen.
+let _navSeq = 0;
+function staleNav(my) { return my !== _navSeq; }
+
 async function navigate(view) {
+  _navSeq++;
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
@@ -483,7 +522,7 @@ function requirePasswordThen(description, confirmMsg, action, opts) {
 
 async function renderSettings() {
   await refreshHasPassword();
-  let s = { business_name: '', text_size: 'normal', autobackup_enabled: false, autobackup_dir: '' };
+  let s = { business_name: '', text_size: 'normal', autobackup_enabled: false, autobackup_dir: '', last_backup_at: '' };
   try { s = await api('get_settings'); } catch (_) {}
   let detected = { folders: [] };
   try { detected = await api('detect_sync_folders'); } catch (_) {}
@@ -515,6 +554,7 @@ async function renderSettings() {
       <h3 style="margin-top:0">💾 Backup</h3>
       <p style="color:var(--text-muted);margin:0 0 14px">Save a complete copy of all your data to your <b>Downloads</b> folder, then copy it to a USB drive or Google Drive / OneDrive. Do this regularly.</p>
       <button type="button" class="btn btn-primary" onclick="doBackup()">💾 Back up now</button>
+      <span class="ab-status ${s.last_backup_at ? 'ok' : 'err'}" style="margin-left:10px;display:inline-block">${s.last_backup_at ? '✓ Last backup: ' + esc(s.last_backup_at) : '⚠ No backup taken yet'}</span>
       <p style="color:var(--text-muted);font-size:12.5px;margin:12px 0 0">To restore on another PC: close the app, copy your backup file into the app's folder and rename it to <code>finance.db</code>, then start the app.</p>
     </div>`;
 
@@ -670,7 +710,10 @@ async function doBackup() {
   try { r = await api('backup_db'); }
   catch (e) { return; }
   finally { loading(false); }
-  if (r && r.success) toast('Backup saved → ' + r.path, 'success');
+  if (r && r.success) {
+    toast('Backup saved → ' + r.path, 'success');
+    if (currentView === 'settings') renderSettings();
+  }
   else toast('Backup failed: ' + (r && r.error || 'unknown'), 'error');
 }
 
@@ -833,12 +876,14 @@ async function refreshCurrentView() {
 
 // ── Dashboard view ───────────────────────────────────────────────
 async function renderDashboard() {
+  const my = _navSeq;
   loading(true);
   let summaries;
   try { summaries = await api('get_all_borrowers'); }
   finally { loading(false); }
+  if (staleNav(my)) return;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayISO();
   const todayFmt = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
   const view = document.getElementById('view');
 
@@ -858,27 +903,26 @@ async function renderDashboard() {
     return;
   }
 
-  // Due Today/Tomorrow — next installment due today or tomorrow.
+  // Due Today/Tomorrow — an installment falls due today (paid or not yet),
+  // or the next one is due tomorrow. On its due day an unpaid installment
+  // already counts as overdue, so "today" must not skip overdue borrowers.
+  const dueDays = s => (s.closed ? null : s.due_today ? 0 : (!s.is_overdue ? daysUntilDue(s, today) : null));
   const dueToday = summaries.filter(s => {
-    if (s.closed || s.is_overdue) return false;
-    const nd = nextDueDateFor(s);
-    if (!nd) return false;
-    const d = Math.round((new Date(nd) - new Date(today)) / 86400000);
+    const d = dueDays(s);
     return d === 0 || d === 1;
-  }).sort((a, b) => {
-    const da = Math.round((new Date(nextDueDateFor(a)) - new Date(today)) / 86400000);
-    const db2 = Math.round((new Date(nextDueDateFor(b)) - new Date(today)) / 86400000);
-    return da - db2;
-  });
+  }).sort((a, b) => (dueDays(a) - dueDays(b)) || ((a.due_today_paid ? 1 : 0) - (b.due_today_paid ? 1 : 0)));
 
-  // Recently overdue — missed payment in last 10 days
+  // Recently missed — an installment's own due date passed 1–10 days ago and
+  // it is still unpaid. ("Days Overdue" is counted from the last covered
+  // installment, so it can't be used here — it is ~30 days on the first miss.)
   const recentOverdue = summaries
-    .filter(s => s.is_overdue && s.days_overdue >= 1 && s.days_overdue <= 10)
-    .sort((a, b) => a.days_overdue - b.days_overdue);
+    .filter(s => s.is_overdue && s.days_since_missed >= 1 && s.days_since_missed <= 10)
+    .sort((a, b) => a.days_since_missed - b.days_since_missed);
 
   const allOverdue = summaries.filter(s => s.is_overdue);
   const longOverdue = allOverdue.filter(s => s.days_overdue > 10);
-  const toCollect = dueToday.reduce((a, s) => a + (s.installment_amount || 0), 0);
+  const toCollect = dueToday.filter(s => !s.due_today_paid).reduce((a, s) => a + (s.installment_amount || 0), 0);
+  const toCollectN = dueToday.filter(s => !s.due_today_paid).length;
   const totalOverdueAmt = allOverdue.reduce((a, s) => a + s.overdue_amount, 0);
   const activeCount = summaries.filter(s => !s.closed).length;
 
@@ -897,7 +941,7 @@ async function renderDashboard() {
       <div class="stat-card success">
         <div class="stat-label">To Collect — Today &amp; Tomorrow</div>
         <div class="stat-value success stat-value-md">${money(toCollect)}</div>
-        <div class="stat-sub">${dueToday.length} installment${dueToday.length !== 1 ? 's' : ''} due</div>
+        <div class="stat-sub">${toCollectN} installment${toCollectN !== 1 ? 's' : ''} still to collect${dueToday.length > toCollectN ? ` · ${dueToday.length - toCollectN} already paid today` : ''}</div>
       </div>
       <div class="stat-card ${allOverdue.length ? 'danger' : 'gray'} clickable" onclick="gotoOverdue()" title="View all overdue borrowers">
         <div class="stat-label">Overdue (all)</div>
@@ -922,10 +966,12 @@ async function renderDashboard() {
           ${dueToday.length === 0
             ? `<div class="dash-empty">No payments due today or tomorrow</div>`
             : dueToday.map(s => {
-                const nd = nextDueDateFor(s);
-                const dLeft = Math.round((new Date(nd) - new Date(today)) / 86400000);
-                const dLabel = dLeft === 0 ? 'Due Today' : 'Due Tomorrow';
-                const dStyle = dLeft === 0
+                const dLeft = dueDays(s);
+                const paid = dLeft === 0 && s.due_today_paid;
+                const dLabel = paid ? '✓ Paid today' : dLeft === 0 ? 'Due Today' : 'Due Tomorrow';
+                const dStyle = paid
+                  ? 'background:#e2e8f0;color:#334155'
+                  : dLeft === 0
                   ? 'background:#bbf7d0;color:#15803d'
                   : 'background:#fef9c3;color:#b45309';
                 return `
@@ -975,7 +1021,7 @@ async function renderDashboard() {
                     ${s.phone ? `<button class="dash-remind" title="Send WhatsApp reminder"
                       data-phone="${esc(s.phone)}" data-name="${esc(s.name)}" data-amt="${esc(money(s.overdue_amount))}" data-kind="overdue"
                       onclick="event.stopPropagation(); remindFromBtn(this)">💬</button>` : ''}
-                    <span class="dash-days">${s.days_overdue}d ago</span>
+                    <span class="dash-days">${s.days_since_missed}d ago</span>
                   </span>
                 </div>
               </div>`).join('')}
@@ -988,6 +1034,7 @@ async function renderDashboard() {
 
 // ── All Borrowers view ───────────────────────────────────────────
 async function renderBorrowers() {
+  const my = _navSeq;
   loading(true);
   let summaries;
   try { summaries = await api('get_all_borrowers'); }
@@ -997,14 +1044,13 @@ async function renderBorrowers() {
   // already entered on borrowers. Non-critical — fall back to empty lists.
   let suggestions = {};
   try { suggestions = await api('get_suggestions'); } catch (_) {}
+  if (staleNav(my)) return;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayISO();
   const overdueSummaries = summaries.filter(s => s.is_overdue);
   const dueSoonCount = summaries.filter(s => {
-    const nd = nextDueDateFor(s);
-    if (!nd) return false;
-    const d = Math.round((new Date(nd) - new Date(today)) / 86400000);
-    return d >= 0 && d <= 7;
+    const d = daysUntilDue(s, today);
+    return d !== null && d >= 0 && d <= 7;
   }).length;
   const totalOverdueAmt = overdueSummaries.reduce((sum, s) => sum + s.overdue_amount, 0);
 
@@ -1027,14 +1073,18 @@ async function renderBorrowers() {
     </div>
     <div class="search-row">
       <input class="search-input" id="borrow-search" type="text"
-        placeholder="Search name, then add father / guarantor / place / showroom…"
-        title="Type a name, then keep adding words (father name, guarantor, place, showroom, phone, vehicle, book ref) to narrow down — every word must match."
+        placeholder="Search name, phone, vehicle, book, key / engine / chassis no…"
+        title="Type a name, phone, vehicle no, book no, key no, engine no, chassis no or serial no. Keep adding words (father, guarantor, place, showroom) to narrow down — every word must match."
         value="${esc(searchQuery)}"
         oninput="filterBorrowers(this.value)" />
       <input class="search-input search-input-receipt" id="receipt-search" type="text"
         placeholder="🧾 Search receipt no…"
         value="${esc(receiptQuery)}"
         oninput="setReceiptQuery(this.value)" />
+      <button class="btn btn-outline btn-sm" onclick="exportBorrowersExcel()"
+        title="Save the rows shown (or only the ticked ones) as an Excel (CSV) file in your Downloads folder">
+        ⬇ Excel
+      </button>
       <button id="pdf-export-btn" class="btn btn-outline btn-sm" onclick="exportBorrowersPDF()"
         title="Tick the rows you want to export only those. Tick none to export the whole filtered list.">
         📄 Export to PDF
@@ -1155,9 +1205,10 @@ function passesBorrowerFilter(s, today, q) {
 
   // ── Due-date window ──
   if (f.due !== 'any') {
-    const nd = nextDueDateFor(s);
-    if (!nd) return false;
-    const daysUntil = Math.round((new Date(nd) - new Date(today)) / 86400000);
+    // 0 = an installment falls due today; otherwise days to the next one.
+    const daysUntil = daysUntilDue(s, today);
+    if (daysUntil === null) return false;
+    const nd = daysUntil === 0 ? today : nextDueDateFor(s);
     if (f.due === 'today'    && daysUntil !== 0) return false;
     if (f.due === 'tomorrow' && daysUntil !== 1) return false;
     if (f.due === 'd3'       && (daysUntil < 0 || daysUntil > 3)) return false;
@@ -1170,9 +1221,11 @@ function passesBorrowerFilter(s, today, q) {
   }
 
   // ── Category exact matches (case-insensitive) ──
-  if (f.place && (s.address || '').toLowerCase() !== f.place.toLowerCase()) return false;
-  if (f.showroom && (s.showroom || '').toLowerCase() !== f.showroom.toLowerCase()) return false;
-  if (f.vehicleType && (s.vehicle_type || '').toLowerCase() !== f.vehicleType.toLowerCase()) return false;
+  // (trimmed: the dropdown lists trimmed values, so "Tumkur " must match "Tumkur")
+  const same = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+  if (f.place && !same(s.address, f.place)) return false;
+  if (f.showroom && !same(s.showroom, f.showroom)) return false;
+  if (f.vehicleType && !same(s.vehicle_type, f.vehicleType)) return false;
 
   // ── Loan amount range ──
   const amin = parseFloat(f.amountMin);
@@ -1193,10 +1246,7 @@ function passesBorrowerFilter(s, today, q) {
   // can start with the name and keep adding words (father / guarantor / place /
   // showroom) to narrow down when several borrowers share the same name.
   if (q) {
-    const fields = [
-      s.name, s.phone, s.vehicle_no, s.book_ref,
-      s.father_name, s.guarantor_name, s.address, s.showroom,
-    ].map(x => (x || '').toString().toLowerCase());
+    const fields = searchFields(s).map(x => x[1]);
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     const matched = terms.every(t => fields.some(f => f.includes(t)));
     if (!matched) return false;
@@ -1210,6 +1260,37 @@ function passesBorrowerFilter(s, today, q) {
     if (!hit) return false;
   }
   return true;
+}
+
+// Every text a search word can match, as [label, lower-case value]. The first
+// group is shown in the table already; the rest (key / engine / chassis /
+// serial no, extra phones) get a small "matched" hint under the name.
+const SEARCH_EXTRA = [
+  ['key_no', '🔑 Key'], ['engine_no', 'Engine'], ['chassis_no', 'Chassis'],
+  ['serial_no', 'S.No'], ['phone2', 'Alt phone'], ['guarantor_phone', 'Guarantor ph'],
+  ['guarantor_phone2', 'Guarantor ph'],
+];
+function searchFields(s) {
+  const base = [s.name, s.phone, s.vehicle_no, s.book_ref,
+                s.father_name, s.guarantor_name, s.address, s.showroom]
+    .map(x => ['', (x || '').toString().toLowerCase()]);
+  return base.concat(SEARCH_EXTRA.map(([k, lbl]) => [lbl, (s[k] || '').toString().toLowerCase()]));
+}
+// "🔑 Key: K5012" when a search word matched only a field that is not a
+// column in the table, so the user can see WHY this borrower is listed.
+function searchHint(s, q) {
+  const terms = (q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return '';
+  const base = searchFields(s).filter(x => !x[0]).map(x => x[1]);
+  const hits = [];
+  for (const t of terms) {
+    if (base.some(f => f.includes(t))) continue;
+    for (const [k, lbl] of SEARCH_EXTRA) {
+      const v = (s[k] || '').toString();
+      if (v && v.toLowerCase().includes(t) && !hits.some(h => h[0] === lbl)) hits.push([lbl, v]);
+    }
+  }
+  return hits.map(([lbl, v]) => `<div class="search-hit">${esc(lbl)}: <b>${esc(v)}</b></div>`).join('');
 }
 
 // Find every payment whose receipt matches the current receipt query, across
@@ -1290,7 +1371,7 @@ function filterBorrowers(q) {
   const summaries = window._allSummaries || [];
   const tbody = document.getElementById('borrow-tbody');
   if (!tbody) return;
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayISO();
 
   const rows = summaries.filter(s => passesBorrowerFilter(s, today, q));
 
@@ -1335,7 +1416,7 @@ function filterBorrowers(q) {
       <td class="td-check"><input type="checkbox" class="row-check" ${checked}
         onclick="event.stopPropagation(); toggleRowSelect(${s.borrower_id}, this.checked)"></td>
       <td>${bookRefTd}</td>
-      <td><strong>${esc(s.name)}</strong></td>
+      <td><strong>${esc(s.name)}</strong>${searchHint(s, q)}</td>
       <td>${esc(s.phone) || '—'}</td>
       <td><code style="font-size:12px">${esc(s.vehicle_no) || '—'}</code></td>
       <td>${fmtDate(s.loan_date)}</td>
@@ -1350,10 +1431,42 @@ function filterBorrowers(q) {
   });
 }
 
+// Save exactly the rows on screen (or the ticked ones) as a CSV for Excel.
+async function exportBorrowersExcel() {
+  const all = window._allSummaries || [];
+  const today = todayISO();
+  const rows = _selectedIds.size > 0
+    ? all.filter(s => _selectedIds.has(s.borrower_id))
+    : all.filter(s => passesBorrowerFilter(s, today, searchQuery));
+  if (!rows.length) { toast('No borrowers to export.', 'error'); return; }
+  const headers = ['Book No', 'Name', 'Father', 'Phone', 'Alt Phone', 'Place', 'Showroom', 'Vehicle Type',
+    'Vehicle No', 'Key No', 'Engine No', 'Chassis No', 'Serial No', 'Loan Date', 'Principal',
+    'Interest % / yr', 'Months', 'EMI', 'Total Payable', 'Paid', 'Remaining', 'Overdue', 'Days Overdue',
+    'Next Due', 'Last Payment', 'Penalties', 'Seizing', 'Status'];
+  const data = rows.map(s => {
+    const du = daysUntilDue(s, today);
+    return [s.book_ref, s.name, s.father_name, s.phone, s.phone2, s.address, s.showroom, s.vehicle_type,
+      s.vehicle_no, s.key_no, s.engine_no, s.chassis_no, s.serial_no, fmtDate(s.loan_date),
+      Math.round(s.loan_amount), s.interest_rate, s.period_months, Math.round(s.installment_amount),
+      Math.round(s.total_payable), Math.round(s.total_paid), Math.round(s.remaining),
+      Math.round(s.is_overdue ? s.overdue_amount : 0), s.is_overdue ? s.days_overdue : 0,
+      du === null ? '' : du === 0 ? fmtDate(today) : fmtDate(nextDueDateFor(s)),
+      fmtDate(s.last_payment_date), Math.round(s.total_penalties), Math.round(s.total_seizings || 0),
+      s.status_label];
+  });
+  loading(true);
+  let r;
+  try { r = await api('export_rows_csv', 'borrowers', headers, data); }
+  catch (_) { return; }
+  finally { loading(false); }
+  if (r && r.success) toast(`Saved ${r.count} borrower(s) → ${r.path}`, 'success');
+  else toast('Export failed: ' + (r && r.error || 'unknown'), 'error');
+}
+
 // ── Row selection (for selective PDF export) ─────────────────────
 function _shownRows() {
   const summaries = window._allSummaries || [];
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayISO();
   return summaries.filter(s => passesBorrowerFilter(s, today, searchQuery));
 }
 
@@ -1751,7 +1864,7 @@ async function exportBorrowersPDF() {
     toast('Borrowers list not loaded yet. Open the Borrowers page first.', 'error');
     return;
   }
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayISO();
   // If any rows are ticked, export exactly those; otherwise the whole filtered list.
   const useSel = _selectedIds.size > 0;
   const targets = useSel
@@ -1789,7 +1902,7 @@ async function exportBorrowersPDF() {
 // + full payments / penalties / seizings tables. Auto-fires window.print() once
 // the document is loaded so Edge's "Save as PDF" dialog appears immediately.
 function buildBorrowersPdfHtml(items, filterLabel, count) {
-  const todayStr = fmtDate(new Date().toISOString().split('T')[0]);
+  const todayStr = fmtDate(todayISO());
   const cards = items.map((it, i) => borrowerPdfCard(it, i + 1)).join('');
   return `<!doctype html>
 <html><head><meta charset="utf-8">
@@ -2253,7 +2366,7 @@ function recalcInstallment() {
   const el = document.getElementById('total-payable-display');
   const ins = document.getElementById('installment-field');
   if (el) el.textContent = money(total);
-  if (ins && !ins.dataset.userEdited) ins.value = period > 0 ? Math.round(total / period) : '';
+  if (ins && !ins.dataset.userEdited) ins.value = (period > 0 && total > 0) ? Math.round(total / period) : '';
 }
 
 async function submitBorrower(e, existingId) {
@@ -2275,6 +2388,12 @@ async function submitBorrower(e, existingId) {
   }
   data.loan_date = iso;
 
+  const dup = await findVehicleDuplicates(data, existingId);
+  if (dup && !confirm(dup + '\n\nSave anyway?')) {
+    btn.disabled = false; btn.textContent = existingId ? '💾 Save Changes' : '✅ Create Loan';
+    return;
+  }
+
   let result;
   try {
     result = existingId
@@ -2295,6 +2414,24 @@ async function submitBorrower(e, existingId) {
   } else {
     showApiError(result);
   }
+}
+
+// Returns a warning message if this vehicle no / engine no / chassis no is
+// already saved on ANOTHER borrower, else ''. Comparison ignores case, spaces
+// and dashes ("KA 16 EZ 4459" = "KA-16-EZ-4459"). Never blocks a save.
+async function findVehicleDuplicates(data, existingId) {
+  const norm = v => (v || '').toString().toUpperCase().replace(/[\s\-\/.]/g, '');
+  const checks = [['vehicle_no', 'Vehicle No'], ['engine_no', 'Engine No'], ['chassis_no', 'Chassis No']]
+    .map(([k, lbl]) => [k, lbl, norm(data[k])]).filter(x => x[2].length >= 4);
+  if (!checks.length) return '';
+  let list = [];
+  try { list = await api('get_all_borrowers'); } catch (_) { return ''; }
+  const lines = [];
+  for (const [k, lbl, v] of checks) {
+    const other = list.find(s => s.borrower_id !== existingId && norm(s[k]) === v);
+    if (other) lines.push(`${lbl} ${data[k]} is already saved for ${other.name}${other.book_ref ? ' (book ' + other.book_ref + ')' : ''} — ${other.status_label}.`);
+  }
+  return lines.length ? '⚠ ' + lines.join('\n⚠ ') : '';
 }
 
 // ── Borrower Detail modal ────────────────────────────────────────
@@ -2320,8 +2457,8 @@ async function showDetail(borrowerId) {
           <td>${modePill(p.payment_mode)}${p.showroom ? `<span class="sh-pill">🏪 ${esc(p.showroom)}</span>` : ''}</td>
           <td>${esc(p.notes) || '—'}</td>
           <td class="action-cell">
-            <button class="btn btn-xs btn-outline" onclick="showEditPayment(${p.id},${b.id})">✏</button>
-            <button class="btn btn-xs btn-danger-sm" onclick="deletePayment(${p.id},${b.id})">🗑</button>
+            <button class="btn btn-xs btn-outline" title="Edit this entry" onclick="showEditPayment(${p.id},${b.id})">✏</button>
+            <button class="btn btn-xs btn-danger-sm" title="Delete this entry" onclick="deletePayment(${p.id},${b.id})">🗑</button>
           </td>
         </tr>`).join('')
     : `<tr class="no-data"><td colspan="7">No payments recorded yet.</td></tr>`;
@@ -2334,8 +2471,8 @@ async function showDetail(borrowerId) {
           <td><strong>${money(p.amount)}</strong></td>
           <td>${esc(p.notes) || '—'}</td>
           <td class="action-cell">
-            <button class="btn btn-xs btn-outline" onclick="showEditPenalty(${p.id},${b.id})">✏</button>
-            <button class="btn btn-xs btn-danger-sm" onclick="deletePenalty(${p.id},${b.id})">🗑</button>
+            <button class="btn btn-xs btn-outline" title="Edit this entry" onclick="showEditPenalty(${p.id},${b.id})">✏</button>
+            <button class="btn btn-xs btn-danger-sm" title="Delete this entry" onclick="deletePenalty(${p.id},${b.id})">🗑</button>
           </td>
         </tr>`).join('')
     : `<tr class="no-data"><td colspan="5">No penalties recorded.</td></tr>`;
@@ -2348,8 +2485,8 @@ async function showDetail(borrowerId) {
           <td><strong>${money(p.amount)}</strong></td>
           <td>${esc(p.reason) || '—'}</td>
           <td class="action-cell">
-            <button class="btn btn-xs btn-outline" onclick="showEditSeizing(${p.id},${b.id})">✏</button>
-            <button class="btn btn-xs btn-danger-sm" onclick="deleteSeizing(${p.id},${b.id})">🗑</button>
+            <button class="btn btn-xs btn-outline" title="Edit this entry" onclick="showEditSeizing(${p.id},${b.id})">✏</button>
+            <button class="btn btn-xs btn-danger-sm" title="Delete this entry" onclick="deleteSeizing(${p.id},${b.id})">🗑</button>
           </td>
         </tr>`).join('')
     : `<tr class="no-data"><td colspan="4">No seizing money recorded.</td></tr>`;
@@ -2365,7 +2502,7 @@ async function showDetail(borrowerId) {
   let penaltyAlert = '';
   if (b.loan_date && b.period_months) {
     const lastDue = jsAddMonths(b.loan_date, b.period_months);
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = todayISO();
     if (!s.closed && s.remaining > 0.01 && todayStr > lastDue) {
       const monthsOver = jsMonthsElapsed(lastDue, todayStr);
       const detail = monthsOver >= 1
@@ -2441,6 +2578,8 @@ async function showDetail(borrowerId) {
         <div class="summary-row"><span class="summary-key">Penalties Paid</span><span class="summary-val">${money(s.total_penalties)}</span></div>
         <div class="summary-row"><span class="summary-key">Seizing Money</span><span class="summary-val">${money(s.total_seizings || 0)}</span></div>
         <div class="summary-row"><span class="summary-key">Last Payment</span><span class="summary-val">${fmtDate(s.last_payment_date) || '—'}</span></div>
+        ${data.settle ? `<div class="summary-row" title="If the borrower wants to close the whole loan today: principal + interest only for the days used so far, minus what is already paid.">
+          <span class="summary-key">To Close Loan Today ⓘ</span><span class="summary-val primary">${money(data.settle.still)}</span></div>` : ''}
       </div>
     </div>
 
@@ -2510,12 +2649,27 @@ async function showAddPayment(borrowerId) {
   // Single payment by default — the common case. "Add another payment" appends
   // more blocks for the occasional bulk back-entry (capped for safety).
   await ensureShowroomOpts();   // for the showroom datalist in each block
+  // Who is paying + EMI, so the user can confirm the person and fill the
+  // amount with one click.
+  let det = null;
+  try { det = await api('get_borrower_detail', borrowerId); } catch (_) {}
+  const ps = det && det.summary;
+  window._payEMI = ps ? Math.round(ps.installment_amount) : 0;
+  window._payOD = ps && ps.is_overdue ? Math.round(ps.overdue_amount) : 0;
+  const who = ps ? `
+      <div class="pay-who">
+        <strong>${esc(ps.name)}</strong>${ps.book_ref ? ` <span class="book-ref-tag">${esc(ps.book_ref)}</span>` : ''}
+        <span class="pay-who-nums">EMI <b>${money(ps.installment_amount)}</b> · Overdue
+          <b style="color:${ps.is_overdue ? 'var(--danger)' : 'var(--success)'}">${ps.is_overdue ? money(ps.overdue_amount) : 'none'}</b>
+          · Remaining <b>${money(ps.remaining)}</b></span>
+      </div>` : '';
   document.getElementById('modal-inner').innerHTML = `
     <div class="mini-modal">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h3>Add Payment</h3>
+        <h3 style="margin:0">Add Payment</h3>
         <button class="modal-close" onclick="showDetail(${borrowerId})">✕</button>
       </div>
+      ${who}
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
         <label style="font-size:13px;font-weight:600;color:var(--text);margin:0">How many payments to add?</label>
         <input type="number" id="pay-count" class="form-control" min="1" max="${MAX_PAYMENTS_AT_ONCE}" value="1"
@@ -2617,7 +2771,11 @@ function buildPaymentBlocks(count, preset) {
           </div>
           <div class="form-group">
             <label>Amount (₹) <span class="req">*</span></label>
-            <input class="form-control pb-amount" type="number" min="1" placeholder="e.g. 7750" value="${esc(a)}" />
+            <input class="form-control pb-amount" type="number" min="1" placeholder="${window._payEMI ? 'e.g. ' + window._payEMI : 'e.g. 7750'}" value="${esc(a)}" />
+            ${window._payEMI ? `<div class="amt-quick">
+              <button type="button" class="btn btn-xs btn-outline" onclick="this.closest('.form-group').querySelector('.pb-amount').value=${window._payEMI}">Use EMI ${money(window._payEMI)}</button>
+              ${window._payOD && window._payOD !== window._payEMI ? `<button type="button" class="btn btn-xs btn-outline" onclick="this.closest('.form-group').querySelector('.pb-amount').value=${window._payOD}">Full overdue ${money(window._payOD)}</button>` : ''}
+            </div>` : ''}
           </div>
           <div class="form-group">
             <label>Installment Label</label>
@@ -3123,10 +3281,12 @@ document.addEventListener('keydown', e => {
 
 // ── Portfolio view ───────────────────────────────────────────────
 async function renderPortfolio() {
+  const my = _navSeq;
   loading(true);
   let p;
   try { p = await api('get_portfolio_summary'); }
   finally { loading(false); }
+  if (staleNav(my)) return;
 
   const collectedPct = p.total_payable > 0
     ? Math.min(100, Math.round((p.total_collected / p.total_payable) * 100))
@@ -3137,7 +3297,7 @@ async function renderPortfolio() {
   const fcCollected   = p.total_collected || 0;        // already received
   const fcSettleStill = p.clear_today_still || 0;       // to close every loan TODAY
   const fcSettleTotal = p.clear_today_total || 0;       // collected + settle-still
-  const fcFullTotal   = p.total_payable || 0;            // grand total at full term
+  const fcFullTotal   = (p.full_term_total !== undefined ? p.full_term_total : p.total_payable) || 0;  // collected + running balances
   const fcFutureInt   = p.clear_future_interest || 0;   // interest skipped by settling today
   const fcStillOwing  = p.active_loans || 0;            // customers who haven't cleared yet
   const fcFullyDone   = fcSettleStill <= 0 && fcSettleTotal > 0;
@@ -3292,7 +3452,7 @@ async function renderPortfolio() {
       <div class="stat-card ${p.total_outstanding > 0 ? 'danger' : 'gray'}">
         <div class="stat-label">Outstanding (still owed)</div>
         <div class="stat-value ${p.total_outstanding > 0 ? 'danger' : ''}" style="font-size:22px">${money(p.total_outstanding)}</div>
-        <div class="stat-sub">Remaining across all active loans</div>
+        <div class="stat-sub">Balance left on all running loans</div>
       </div>
       <div class="stat-card ${p.overdue_count > 0 ? 'danger' : 'gray'}">
         <div class="stat-label">Overdue</div>

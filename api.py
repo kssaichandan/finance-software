@@ -201,7 +201,27 @@ def _summary(s: models.LoanSummary) -> dict:
         "is_advance": s.is_advance,
         "book_ref": s.book_ref,
         "receipts": s.receipts,
+        # 1.37 Extended — read-only extras (never change an existing number)
+        "last_due_date": _iso(s.last_due_date),
+        "next_due_date": _iso(s.next_due_date),
+        "days_until_next": s.days_until_next,
+        "due_today": s.due_today,
+        "due_today_paid": s.due_today_paid,
+        "first_missed_due": _iso(s.first_missed_due),
+        "days_since_missed": s.days_since_missed,
+        "penalty_state": s.penalty_state,
+        "phone2": s.phone2,
+        "guarantor_phone": s.guarantor_phone,
+        "guarantor_phone2": s.guarantor_phone2,
+        "key_no": s.key_no,
+        "engine_no": s.engine_no,
+        "chassis_no": s.chassis_no,
+        "serial_no": s.serial_no,
     }
+
+
+def _iso(d) -> str | None:
+    return d.strftime("%Y-%m-%d") if d else None
 
 
 class API:
@@ -261,6 +281,8 @@ class API:
             "payments": payments,
             "penalties": penalties,
             "seizings": seizings,
+            # Early full-closure amount (same formula as the Portfolio card).
+            "settle": None if s.closed else models.settle_today_amount(s),
         }
 
     # ---- Add / edit borrower ---------------------------------------------
@@ -568,6 +590,7 @@ class API:
             "text_size": db.get_setting("text_size", "normal"),
             "autobackup_enabled": db.get_setting("autobackup_enabled", "0") == "1",
             "autobackup_dir": db.get_setting("autobackup_dir", ""),
+            "last_backup_at": db.get_setting("last_backup_at", ""),
         }
 
     def set_setting(self, key: str, value: str) -> dict:
@@ -667,6 +690,10 @@ class API:
                     dst.close()
             finally:
                 src.close()
+            try:
+                db.set_setting("last_backup_at", _dt.now().strftime("%Y-%m-%d %H:%M"))
+            except Exception:
+                pass
             return {"success": True, "path": dest}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -720,7 +747,11 @@ class API:
     def get_portfolio_summary(self) -> dict:
         rows = db.list_borrowers(include_closed=True)
         total_loans = len(rows)
-        active = sum(1 for r in rows if not r["closed"])
+        # Count from the loan summaries, so a fully-paid loan (closed
+        # automatically) is not reported as "active / still owes you". The DB
+        # `closed` flag alone is only set when a loan is closed by hand.
+        summaries = models.all_summaries()
+        active = sum(1 for s in summaries if not s.closed)
 
         total_principal = sum(float(r["loan_amount"]) for r in rows)
         total_payable = sum(
@@ -740,7 +771,6 @@ class API:
                 conn.execute("SELECT COALESCE(SUM(amount),0) FROM seizings").fetchone()[0]
             )
 
-        summaries = models.all_summaries()
         overdue_count = sum(1 for s in summaries if s.is_overdue)
         total_overdue_amt = sum(s.overdue_amount for s in summaries if s.is_overdue)
 
@@ -847,18 +877,19 @@ class API:
         # is principal + interest-so-far; what's still owed today is that minus
         # what they've already paid (never negative). "Grand total" = money
         # already collected + what everyone would pay to close today.
-        clear_today_still = 0.0
-        for s in summaries:
-            full_interest = max(0.0, s.total_payable - s.loan_amount)
-            end = models._add_months(s.loan_date, s.period_months)
-            total_days = (end - s.loan_date).days
-            elapsed = (today - s.loan_date).days
-            frac = 1.0 if total_days <= 0 else min(1.0, max(0.0, elapsed / total_days))
-            settle_total = s.loan_amount + full_interest * frac
-            clear_today_still += max(0.0, settle_total - s.total_paid)
+        # Only RUNNING loans can still pay — a closed loan (e.g. settled with a
+        # discount) owes nothing more, so it is left out of "still to collect".
+        # Likewise "full term" = money already collected + every running loan's
+        # remaining balance (an over-payment is money in hand, not a reduction
+        # of someone else's dues). With no closed-with-balance or over-paid
+        # loans these equal the v1.37 figures exactly.
+        active_s = [s for s in summaries if not s.closed]
+        clear_today_still = sum(models.settle_today_amount(s, today)["still"] for s in active_s)
         clear_today_total = total_collected + clear_today_still
+        active_outstanding = sum(s.remaining for s in active_s)
+        full_term_total = total_collected + active_outstanding
         # Extra interest you'd earn by letting every loan run to its full term.
-        clear_future_interest = max(0.0, total_payable - clear_today_total)
+        clear_future_interest = max(0.0, full_term_total - clear_today_total)
 
         # Months the user can pick in the selector — every month that has a
         # payment, plus the current month (so it is always selectable), newest
@@ -874,7 +905,11 @@ class API:
             "total_principal": total_principal,
             "total_payable": total_payable,
             "total_collected": total_collected,
-            "total_outstanding": max(0.0, total_payable - total_collected),
+            # Balance still to come from RUNNING loans (sum of each one's
+            # remaining). Was payable - collected over every loan, which let a
+            # closed loan's unpaid balance or an over-payment skew it.
+            "total_outstanding": active_outstanding,
+            "full_term_total": full_term_total,
             "total_penalties": total_penalties,
             "total_seizings": total_seizings,
             "overdue_count": overdue_count,
@@ -907,6 +942,31 @@ class API:
         summaries = models.all_summaries()
         ratio = _loan_interest_ratios(summaries)
         return _month_breakdown(ym, ratio, db.payment_rows_for_analytics())
+
+    # ---- Generic CSV export (Borrowers list -> Excel) --------------------
+
+    def export_rows_csv(self, name: str, headers: list, rows: list) -> dict:
+        """Write a table the screen already shows to a CSV in Downloads (opens
+        in Excel). Text cells are formula-injection-safe."""
+        try:
+            safe = "".join(ch for ch in (name or "export") if ch.isalnum() or ch in "-_")[:40] or "export"
+            if not isinstance(headers, list) or not isinstance(rows, list):
+                return {"success": False, "error": "Nothing to export."}
+            from datetime import datetime as _dt
+            stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            downloads = Path(os.path.expanduser("~")) / "Downloads"
+            downloads.mkdir(parents=True, exist_ok=True)
+            path = str(downloads / f"{safe}_{stamp}.csv")
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                w.writerow([_csv_safe(h) for h in headers])
+                for r in rows:
+                    if isinstance(r, list):
+                        w.writerow([v if isinstance(v, (int, float)) and not isinstance(v, bool)
+                                    else _csv_safe(v) for v in r])
+            return {"success": True, "path": path, "count": len(rows)}
+        except OSError as e:
+            return {"success": False, "error": str(e)}
 
     # ---- CSV Export ------------------------------------------------------
 

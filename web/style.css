@@ -674,3 +674,16 @@ html[data-text-size="xlarge"] #toasts { zoom: 1.25; }
   .stat-grid { grid-template-columns: 1fr !important; }
   .view-container { padding: 18px 16px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   1.37 Extended — small additions, styled to match the existing look.
+   ══════════════════════════════════════════════════════════════════ */
+/* Borrowers table: why a row matched a search word that is not a column */
+.search-hit { font-size: 11.5px; color: var(--primary); margin-top: 2px; font-weight: 500; }
+.search-hit b { font-weight: 700; }
+/* Add Payment: who is paying + one-click amount buttons */
+.pay-who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--gray-light);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 14px; }
+.pay-who-nums { margin-left: auto; font-size: 13px; color: var(--text-muted); }
+.pay-who-nums b { color: var(--text); }
+.amt-quick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
