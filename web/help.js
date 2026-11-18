@@ -897,3 +897,51 @@ window.HELP_CONTENT = {
     if (C[k] && Array.isArray(C[k].sections)) C[k].sections.splice(1, 0, S[k]);
   }
 })();
+
+// ── v1.40: Search by field (separate boxes) ──
+// Inserted as the 2nd section of every language so it is seen first.
+(function addV140Help() {
+  const S = {
+    en: { h: '🔎 New in v1.40 — Search by field', body: `<ul>
+      <li>On the <b>Borrowers</b> page, click <b>🔎 Search by field</b> (under the search box). You get separate boxes: <b>Name, Phone, Vehicle No, Book No, Key No, Engine No, Chassis No, Serial No, Father, Guarantor, Place</b>.</li>
+      <li>Each box searches <b>only its own field</b> — e.g. typing 5047 in <b>Key No</b> finds only key numbers, never phone numbers.</li>
+      <li>You can fill several boxes at once (e.g. Name + Place). For numbers, spaces and dashes don't matter: <b>KA 16 EZ</b> finds <b>KA-16-EZ-4459</b>.</li>
+      <li>The all-in-one search box still works as before, and works together with the boxes.</li>
+      <li>The same boxes are in <b>₹ Record Payment</b> → <b>🔎 Search by field</b>.</li>
+      <li><b>✕ Clear boxes</b> empties them; <b>✕ Clear search</b> empties every search box.</li></ul>` },
+    hi: { h: '🔎 v1.40 में नया — अलग-अलग खोज', body: `<ul>
+      <li><b>Borrowers</b> पेज पर सर्च बॉक्स के नीचे <b>🔎 Search by field</b> दबाएँ। अलग बॉक्स मिलेंगे: <b>नाम, फ़ोन, वाहन नंबर, बुक नंबर, Key No, Engine No, Chassis No, Serial No, पिता, गारंटर, जगह</b>।</li>
+      <li>हर बॉक्स <b>सिर्फ़ अपना फ़ील्ड</b> खोजता है — जैसे Key No में 5047 लिखने पर सिर्फ़ key नंबर मिलेंगे।</li>
+      <li>एक साथ कई बॉक्स भर सकते हैं। नंबरों में स्पेस और डैश से फ़र्क नहीं पड़ता।</li>
+      <li>पुराना सर्च बॉक्स भी पहले जैसा चलता है। यही बॉक्स <b>₹ Record Payment</b> में भी हैं।</li></ul>` },
+    kn: { h: '🔎 v1.40 ನಲ್ಲಿ ಹೊಸದು — ಪ್ರತ್ಯೇಕ ಹುಡುಕಾಟ', body: `<ul>
+      <li><b>Borrowers</b> ಪುಟದಲ್ಲಿ ಹುಡುಕಾಟ ಬಾಕ್ಸ್ ಕೆಳಗೆ <b>🔎 Search by field</b> ಒತ್ತಿ. ಪ್ರತ್ಯೇಕ ಬಾಕ್ಸ್‌ಗಳು: <b>ಹೆಸರು, ಫೋನ್, ವಾಹನ ನಂಬರ್, ಬುಕ್ ನಂಬರ್, Key No, Engine No, Chassis No, Serial No, ತಂದೆ, ಜಾಮೀನುದಾರ, ಊರು</b>.</li>
+      <li>ಪ್ರತಿ ಬಾಕ್ಸ್ <b>ತನ್ನ ಕ್ಷೇತ್ರವನ್ನು ಮಾತ್ರ</b> ಹುಡುಕುತ್ತದೆ — Key No ನಲ್ಲಿ 5047 ಹಾಕಿದರೆ key ನಂಬರ್ ಮಾತ್ರ.</li>
+      <li>ಒಂದೇ ಸಲ ಹಲವು ಬಾಕ್ಸ್ ತುಂಬಬಹುದು. ನಂಬರ್‌ಗಳಲ್ಲಿ ಸ್ಪೇಸ್ / ಡ್ಯಾಶ್ ಮುಖ್ಯವಲ್ಲ.</li>
+      <li>ಹಳೆಯ ಹುಡುಕಾಟ ಬಾಕ್ಸ್ ಹಾಗೆಯೇ ಕೆಲಸ ಮಾಡುತ್ತದೆ. ಇದೇ ಬಾಕ್ಸ್‌ಗಳು <b>₹ Record Payment</b> ನಲ್ಲಿಯೂ ಇವೆ.</li></ul>` },
+    te: { h: '🔎 v1.40 లో కొత్తది — వేర్వేరు శోధన', body: `<ul>
+      <li><b>Borrowers</b> పేజీలో సెర్చ్ బాక్స్ కింద <b>🔎 Search by field</b> నొక్కండి. వేర్వేరు బాక్సులు: <b>పేరు, ఫోన్, వాహన నంబర్, బుక్ నంబర్, Key No, Engine No, Chassis No, Serial No, తండ్రి, హామీదారు, ఊరు</b>.</li>
+      <li>ప్రతి బాక్స్ <b>తన ఫీల్డ్‌నే</b> వెతుకుతుంది — Key No లో 5047 వేస్తే key నంబర్లే వస్తాయి.</li>
+      <li>ఒకేసారి చాలా బాక్సులు నింపవచ్చు. నంబర్లలో స్పేస్ / డ్యాష్ పట్టించుకోదు.</li>
+      <li>పాత సెర్చ్ బాక్స్ అలాగే పనిచేస్తుంది. ఇవే బాక్సులు <b>₹ Record Payment</b> లో కూడా ఉన్నాయి.</li></ul>` },
+    ta: { h: '🔎 v1.40 இல் புதியது — தனித்தனி தேடல்', body: `<ul>
+      <li><b>Borrowers</b> பக்கத்தில் தேடல் பெட்டிக்கு கீழே <b>🔎 Search by field</b> அழுத்தவும். தனித்தனி பெட்டிகள்: <b>பெயர், போன், வாகன எண், புத்தக எண், Key No, Engine No, Chassis No, Serial No, தந்தை, ஜாமீன்தாரர், ஊர்</b>.</li>
+      <li>ஒவ்வொரு பெட்டியும் <b>தன் புலத்தை மட்டும்</b> தேடும் — Key No இல் 5047 இட்டால் key எண்கள் மட்டும்.</li>
+      <li>பல பெட்டிகளை ஒரே நேரத்தில் நிரப்பலாம். எண்களில் இடைவெளி / கோடு பொருட்டல்ல.</li>
+      <li>பழைய தேடல் பெட்டி அப்படியே வேலை செய்யும். இதே பெட்டிகள் <b>₹ Record Payment</b> இலும் உள்ளன.</li></ul>` },
+    ml: { h: '🔎 v1.40 ൽ പുതിയത് — വേറിട്ട തിരയൽ', body: `<ul>
+      <li><b>Borrowers</b> പേജിൽ തിരയൽ ബോക്സിന് താഴെ <b>🔎 Search by field</b> അമർത്തുക. വേറിട്ട ബോക്സുകൾ: <b>പേര്, ഫോൺ, വാഹന നമ്പർ, ബുക്ക് നമ്പർ, Key No, Engine No, Chassis No, Serial No, അച്ഛൻ, ജാമ്യക്കാരൻ, സ്ഥലം</b>.</li>
+      <li>ഓരോ ബോക്സും <b>സ്വന്തം ഫീൽഡ് മാത്രം</b> തിരയും — Key No ൽ 5047 നൽകിയാൽ key നമ്പറുകൾ മാത്രം.</li>
+      <li>ഒരേ സമയം പല ബോക്സുകളും നിറയ്ക്കാം. നമ്പറുകളിൽ സ്പേസ് / ഡാഷ് പ്രശ്നമല്ല.</li>
+      <li>പഴയ തിരയൽ ബോക്സ് അതുപോലെ പ്രവർത്തിക്കും. ഇതേ ബോക്സുകൾ <b>₹ Record Payment</b> ലും ഉണ്ട്.</li></ul>` },
+    mr: { h: '🔎 v1.40 मध्ये नवीन — वेगवेगळा शोध', body: `<ul>
+      <li><b>Borrowers</b> पानावर शोध बॉक्सखाली <b>🔎 Search by field</b> दाबा. वेगवेगळे बॉक्स: <b>नाव, फोन, वाहन नंबर, बुक नंबर, Key No, Engine No, Chassis No, Serial No, वडील, जामीनदार, गाव</b>.</li>
+      <li>प्रत्येक बॉक्स <b>फक्त आपले फील्ड</b> शोधतो — Key No मध्ये 5047 टाकल्यास फक्त key नंबर.</li>
+      <li>एकाच वेळी अनेक बॉक्स भरू शकता. नंबरमध्ये स्पेस / डॅशचा फरक पडत नाही.</li>
+      <li>जुना शोध बॉक्स पूर्वीसारखाच चालतो. हेच बॉक्स <b>₹ Record Payment</b> मध्येही आहेत.</li></ul>` },
+  };
+  const C = window.HELP_CONTENT || {};
+  for (const k of Object.keys(S)) {
+    if (C[k] && Array.isArray(C[k].sections)) C[k].sections.splice(1, 0, S[k]);
+  }
+})();

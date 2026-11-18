@@ -5,6 +5,71 @@ let currentView = 'dashboard';
 let searchQuery = '';      // each typed word must match name/father/guarantor/place/showroom/phone/vehicle/book ref
 let receiptQuery = '';     // matches receipt numbers (separate input in toolbar)
 
+// ── Search by field (separate boxes) ─────────────────────────────
+// Each box looks ONLY in its own field(s). Filled boxes are ANDed with each
+// other, with the all-in-one search box, the receipt box and the filters.
+// Number-like boxes ignore spaces / dashes ("KA 16 EZ" finds "KA-16-EZ-4459").
+const FIELD_SEARCH = [
+  { key: 'name',      label: 'Name',         fields: ['name'],             ph: 'e.g. Ramesh' },
+  { key: 'phone',     label: 'Phone',        fields: ['phone', 'phone2'],  ph: 'mobile / alternate no', num: true },
+  { key: 'vehicle',   label: 'Vehicle No',   fields: ['vehicle_no'],       ph: 'e.g. KA 16 EZ 4459', num: true },
+  { key: 'book',      label: 'Book No',      fields: ['book_ref'],         ph: 'e.g. B12', num: true },
+  { key: 'key',       label: 'Key No',       fields: ['key_no'],           ph: 'key number', num: true },
+  { key: 'engine',    label: 'Engine No',    fields: ['engine_no'],        ph: 'engine number', num: true },
+  { key: 'chassis',   label: 'Chassis No',   fields: ['chassis_no'],       ph: 'chassis number', num: true },
+  { key: 'serial',    label: 'Serial No',    fields: ['serial_no'],        ph: 'S.No', num: true },
+  { key: 'father',    label: 'Father (S/o)', fields: ['father_name'],      ph: "father's name" },
+  { key: 'guarantor', label: 'Guarantor',    fields: ['guarantor_name', 'guarantor_phone', 'guarantor_phone2'], ph: 'name or phone' },
+  { key: 'place',     label: 'Place',        fields: ['address'],          ph: 'village / town' },
+];
+function emptyFieldSearch() {
+  const o = {};
+  FIELD_SEARCH.forEach(f => { o[f.key] = ''; });
+  return o;
+}
+let fieldSearch = emptyFieldSearch();   // Borrowers page boxes
+let _fsOpen = false;                    // Borrowers "Search by field" panel open?
+const _fsNorm = v => (v || '').toString().toLowerCase().replace(/[\s\-\/.]/g, '');
+
+// True when borrower `s` matches every filled box in `fs`.
+function matchesFieldSearch(s, fs) {
+  for (const f of FIELD_SEARCH) {
+    const raw = ((fs && fs[f.key]) || '').trim();
+    if (!raw) continue;
+    const vals = f.fields.map(k => (s[k] || '').toString());
+    if (f.num) {
+      const q = _fsNorm(raw);
+      if (q && !vals.some(v => _fsNorm(v).includes(q))) return false;
+    } else {
+      // Text box: every typed word must appear in the field (a word with
+      // digits — e.g. a guarantor phone — also matches ignoring dashes).
+      const lv = vals.map(v => v.toLowerCase());
+      const words = raw.toLowerCase().split(/\s+/).filter(Boolean);
+      const ok = words.every(w => lv.some(v => v.includes(w) || (/\d/.test(w) && _fsNorm(v).includes(_fsNorm(w)))));
+      if (!ok) return false;
+    }
+  }
+  return true;
+}
+function fieldSearchCount(fs) {
+  return FIELD_SEARCH.filter(f => ((fs && fs[f.key]) || '').trim()).length;
+}
+// "Key No: K50 · Place: Sira" — for the PDF heading and the panel badge.
+function fieldSearchParts(fs) {
+  return FIELD_SEARCH.filter(f => ((fs && fs[f.key]) || '').trim())
+    .map(f => `${f.label}: ${fs[f.key].trim()}`);
+}
+// The grid of labelled boxes (shared by the Borrowers page and Record Payment).
+function fieldSearchGrid(fs, idPrefix, onInput, onKey) {
+  return `<div class="filter-grid fs-grid">${FIELD_SEARCH.map(f => `
+    <div class="filter-field">
+      <label for="${idPrefix}${f.key}">${esc(f.label)}</label>
+      <input class="form-control fs-input" id="${idPrefix}${f.key}" type="text" autocomplete="off"
+        placeholder="${esc(f.ph)}" value="${esc(fs[f.key])}"
+        oninput="${onInput}('${f.key}', this.value)"${onKey ? ` onkeydown="${onKey}(event)"` : ''} />
+    </div>`).join('')}</div>`;
+}
+
 // ── Borrowers-list filter panel ──────────────────────────────────
 // Every section below is ANDed together (plus the search + receipt boxes).
 // Empty / 'any' values mean "no constraint for this section".
@@ -449,6 +514,7 @@ function gotoOverdue() {
 // Global search (sidebar) — open the Borrowers list filtered to the typed text.
 function globalSearchGo(v) {
   searchQuery = (v || '').trim();
+  fieldSearch = emptyFieldSearch();
   hideGlobalResults();
   navigate('borrowers');
 }
@@ -523,7 +589,9 @@ function statusDot(s) {
 
 // ── Record Payment (from anywhere) ───────────────────────────────
 // Step 1: pick the borrower (type to search). Step 2: the normal Add Payment form.
+let _rpFields = emptyFieldSearch();   // Record Payment "Search by field" boxes
 async function openRecordPayment(prefill) {
+  _rpFields = emptyFieldSearch();
   let list = [];
   loading(true);
   try { list = await getBorrowersCached(); }
@@ -539,6 +607,17 @@ async function openRecordPayment(prefill) {
       <input class="form-control rp-search" id="rp-search" type="text" autocomplete="off"
         placeholder="Start typing… e.g. Ramesh, 98450…, KA-16, B12" value="${esc(prefill || '')}"
         oninput="renderRecordPaymentList(this.value)" onkeydown="recordPaymentKey(event)" />
+      <div class="rp-fs">
+        <button type="button" class="fp-toggle rp-fs-toggle" onclick="toggleRpFieldSearch()">
+          <span class="fp-caret">▸</span> 🔎 Search by field
+          <span class="muted-hint">(name, phone, vehicle, key no…)</span>
+          <span class="fp-active" id="rp-fs-count"></span>
+        </button>
+        <div id="rp-fs-body" style="display:none">
+          ${fieldSearchGrid(_rpFields, 'rpfs-', 'setRpField', 'recordPaymentKey')}
+          <button type="button" class="btn btn-sm btn-ghost" style="margin-top:8px" onclick="clearRpFields()">✕ Clear boxes</button>
+        </div>
+      </div>
       <div id="rp-list" class="rp-list"></div>
     </div>`;
   window._rpList = list;
@@ -550,20 +629,29 @@ let _rpSel = 0, _rpItems = [];
 function renderRecordPaymentList(q) {
   const box = document.getElementById('rp-list');
   if (!box) return;
-  const list = window._rpList || [];
   q = (q || '').trim();
-  // No text yet → show running loans that are due / overdue first (the usual payers).
-  _rpItems = q ? searchBorrowers(list, q, 12)
-    : list.filter(s => !s.closed)
+  const nBoxes = fieldSearchCount(_rpFields);
+  // Separate boxes narrow the list first; the main box then ranks what is left.
+  const list = (window._rpList || []).filter(s => matchesFieldSearch(s, _rpFields));
+  const cnt = document.getElementById('rp-fs-count');
+  if (cnt) { cnt.textContent = nBoxes ? `${nBoxes} active` : ''; cnt.classList.toggle('on', nBoxes > 0); }
+  if (q) _rpItems = searchBorrowers(list, q, 12);
+  else if (nBoxes) {
+    // Boxes only: running loans first, then by name.
+    _rpItems = list.slice().sort((a, b) => ((a.closed ? 1 : 0) - (b.closed ? 1 : 0)) || (a.name || '').localeCompare(b.name || '')).slice(0, 12);
+  } else {
+    // Nothing typed → show running loans that are due / overdue first (the usual payers).
+    _rpItems = list.filter(s => !s.closed)
           .map(s => [s.is_overdue ? 0 : (daysUntilDue(s) ?? 99) <= 3 ? 1 : 2, s])
           .sort((a, b) => a[0] - b[0] || (a[1].name || '').localeCompare(b[1].name || ''))
           .slice(0, 12).map(x => x[1]);
+  }
   _rpSel = 0;
   if (!_rpItems.length) {
     box.innerHTML = `<div class="rp-empty">No borrower found. Check the spelling, or search by phone / book no.</div>`;
     return;
   }
-  box.innerHTML = (q ? '' : `<div class="rp-hint">Running loans — overdue &amp; due soon first</div>`) +
+  box.innerHTML = (q || nBoxes ? '' : `<div class="rp-hint">Running loans — overdue &amp; due soon first</div>`) +
     _rpItems.map((s, i) => `
     <div class="rp-item ${i === _rpSel ? 'sel' : ''}" onclick="pickRecordPayment(${i})">
       <div class="rp-main">
@@ -587,6 +675,26 @@ function recordPaymentKey(e) {
     e.preventDefault();
     pickRecordPayment(_rpSel);
   }
+}
+function toggleRpFieldSearch() {
+  const body = document.getElementById('rp-fs-body');
+  if (!body) return;
+  const open = body.style.display === 'none';
+  body.style.display = open ? '' : 'none';
+  const caret = document.querySelector('.rp-fs-toggle .fp-caret');
+  if (caret) caret.textContent = open ? '▾' : '▸';
+  if (open) { const f = document.getElementById('rpfs-name'); if (f) f.focus(); }
+}
+function setRpField(key, value) {
+  _rpFields[key] = value;
+  const main = document.getElementById('rp-search');
+  renderRecordPaymentList(main ? main.value : '');
+}
+function clearRpFields() {
+  _rpFields = emptyFieldSearch();
+  document.querySelectorAll('#rp-fs-body .fs-input').forEach(el => { el.value = ''; });
+  const main = document.getElementById('rp-search');
+  renderRecordPaymentList(main ? main.value : '');
 }
 function pickRecordPayment(i) {
   const s = _rpItems[i];
@@ -1175,6 +1283,7 @@ function drill(opts) {
   Object.assign(filters, opts || {});
   searchQuery = '';
   receiptQuery = '';
+  fieldSearch = emptyFieldSearch();
   _filtersOpen = false;
   navigate('borrowers');
 }
@@ -1748,13 +1857,14 @@ async function renderBorrowers() {
 
   const today = todayISO();
   // Chip counts use the very same filter predicate as the table.
-  const savedF = filters;
+  const savedF = filters, savedFS = fieldSearch;
+  fieldSearch = emptyFieldSearch();
   const chipCounts = {};
   for (const [k] of QUICK_CHIPS) {
     filters = chipFilters(k);
     chipCounts[k] = summaries.filter(s => passesBorrowerFilter(s, today, '')).length;
   }
-  filters = savedF;
+  filters = savedF; fieldSearch = savedFS;
   const activeChip = activeChipKey();
   const overdueSummaries = summaries.filter(s => s.is_overdue);
   const dueSoonCount = summaries.filter(s => {
@@ -1795,7 +1905,7 @@ async function renderBorrowers() {
         placeholder="🧾 Search receipt no…"
         value="${esc(receiptQuery)}"
         oninput="setReceiptQuery(this.value)" />
-      ${searchQuery || receiptQuery ? `<button class="btn btn-ghost btn-sm" onclick="clearBorrowerSearch()">✕ Clear search</button>` : ''}
+      ${searchQuery || receiptQuery || fieldSearchCount(fieldSearch) ? `<button class="btn btn-ghost btn-sm" onclick="clearBorrowerSearch()">✕ Clear search</button>` : ''}
       <button class="btn btn-outline btn-sm" onclick="exportBorrowersExcel()"
         title="Save the rows shown (or only the ticked ones) as an Excel (CSV) file in your Downloads folder">
         ⬇ Excel
@@ -1806,6 +1916,7 @@ async function renderBorrowers() {
       </button>
       <span id="selection-info" class="selection-info"></span>
     </div>
+    ${renderFieldSearchPanel()}
     ${renderFilterPanel(suggestions)}
     <div id="receipt-match-slot"></div>
     <div class="card">
@@ -1837,7 +1948,58 @@ async function renderBorrowers() {
 
 function clearBorrowerSearch() {
   searchQuery = ''; receiptQuery = '';
+  fieldSearch = emptyFieldSearch();
   renderBorrowers();
+}
+
+// "🔎 Search by field" panel — same look and behaviour as the Filters panel.
+function renderFieldSearchPanel() {
+  if (fieldSearchCount(fieldSearch)) _fsOpen = true;   // never hide boxes that are in use
+  const open = _fsOpen;
+  return `
+  <div class="filter-panel fs-panel ${open ? 'open' : 'collapsed'}" id="fs-panel">
+    <div class="filter-panel-head">
+      <button class="fp-toggle" onclick="toggleFieldSearch()" aria-expanded="${open}">
+        <span class="fp-caret">${open ? '▾' : '▸'}</span> 🔎 Search by field
+      </button>
+      <span class="fp-active" id="fs-active-count"></span>
+      <span class="muted-hint fs-hint">Separate boxes for name, phone, vehicle, book, key, engine, chassis, serial no…</span>
+      <button class="btn btn-sm btn-outline fp-clear" onclick="clearFieldSearch()" title="Empty all the boxes below">✕ Clear boxes</button>
+    </div>
+    <div class="filter-body" ${open ? '' : 'style="display:none"'}>
+      ${fieldSearchGrid(fieldSearch, 'fs-', 'setFieldSearch', null)}
+    </div>
+  </div>`;
+}
+function toggleFieldSearch() {
+  _fsOpen = !_fsOpen;
+  const panel = document.getElementById('fs-panel');
+  if (!panel) return;
+  const body = panel.querySelector('.filter-body');
+  if (body) body.style.display = _fsOpen ? '' : 'none';
+  const caret = panel.querySelector('.fp-caret');
+  if (caret) caret.textContent = _fsOpen ? '▾' : '▸';
+  const t = panel.querySelector('.fp-toggle');
+  if (t) t.setAttribute('aria-expanded', _fsOpen);
+  panel.classList.toggle('open', _fsOpen);
+  panel.classList.toggle('collapsed', !_fsOpen);
+  if (_fsOpen) { const first = document.getElementById('fs-name'); if (first) first.focus(); }
+}
+function setFieldSearch(key, value) {
+  fieldSearch[key] = value;
+  filterBorrowers(searchQuery);
+}
+function clearFieldSearch() {
+  fieldSearch = emptyFieldSearch();
+  document.querySelectorAll('#fs-panel .fs-input').forEach(el => { el.value = ''; });
+  filterBorrowers(searchQuery);
+}
+function updateFieldSearchCount() {
+  const el = document.getElementById('fs-active-count');
+  if (!el) return;
+  const n = fieldSearchCount(fieldSearch);
+  el.textContent = n ? `${n} active` : '';
+  el.classList.toggle('on', n > 0);
 }
 
 function setReceiptQuery(v) {
@@ -1962,6 +2124,9 @@ function passesBorrowerFilter(s, today, q) {
     if (!matchesCustomCondition(s, c)) return false;
   }
 
+  // ── Search by field: each filled box must match its own field ──
+  if (!matchesFieldSearch(s, fieldSearch)) return false;
+
   // Normal search box: each typed word must match at least one field, so you
   // can start with the name and keep adding words (father / guarantor / place /
   // showroom) to narrow down when several borrowers share the same name.
@@ -2000,7 +2165,7 @@ function searchFields(s) {
 // column in the table, so the user can see WHY this borrower is listed.
 function searchHint(s, q) {
   const terms = (q || '').toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return '';
+  if (!terms.length && !fieldSearchCount(fieldSearch)) return '';
   const base = searchFields(s).filter(x => !x[0]).map(x => x[1]);
   const hits = [];
   for (const t of terms) {
@@ -2010,6 +2175,15 @@ function searchHint(s, q) {
       if (v && v.toLowerCase().includes(t) && !hits.some(h => h[0] === lbl)) hits.push([lbl, v]);
     }
   }
+  // Separate boxes for fields that are not columns in the table.
+  const boxHints = [['key', 'key_no', '🔑 Key'], ['engine', 'engine_no', 'Engine'],
+                    ['chassis', 'chassis_no', 'Chassis'], ['serial', 'serial_no', 'S.No']];
+  for (const [box, k, lbl] of boxHints) {
+    if ((fieldSearch[box] || '').trim() && s[k] && !hits.some(h => h[0] === lbl)) hits.push([lbl, s[k]]);
+  }
+  if ((fieldSearch.phone || '').trim() && s.phone2 &&
+      _fsNorm(s.phone2).includes(_fsNorm(fieldSearch.phone)) && !_fsNorm(s.phone).includes(_fsNorm(fieldSearch.phone)) &&
+      !hits.some(h => h[0] === 'Alt phone')) hits.push(['Alt phone', s.phone2]);
   return hits.map(([lbl, v]) => `<div class="search-hit">${esc(lbl)}: <b>${esc(v)}</b></div>`).join('');
 }
 
@@ -2082,6 +2256,8 @@ function currentFilterLabel() {
   const parts = activeFilterParts();
   let label = parts.length ? parts.join(' · ') : 'All Borrowers (Active + Closed)';
   if (searchQuery) label += ` · search: "${searchQuery}"`;
+  const fsp = fieldSearchParts(fieldSearch);
+  if (fsp.length) label += ' · ' + fsp.join(' · ');
   return label;
 }
 
@@ -2122,6 +2298,7 @@ function filterBorrowers(q) {
   document.querySelectorAll('.qchip').forEach(el =>
     el.classList.toggle('active', !!ak && el.classList.contains('qchip-' + ak)));
   updateActiveFilterCount();
+  updateFieldSearchCount();
   updateSortCarets();
   updateSelectAllState(rows);
   updateSelectionUI();

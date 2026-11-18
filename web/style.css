@@ -950,3 +950,14 @@ html[data-text-size="xlarge"] #toasts { zoom: 1.25; }
   .kpi-grid, .kpi-grid.five { grid-template-columns: 1fr; }
   .sidebar-cta, .sidebar-search { display: none; }
 }
+
+/* ── v1.40: Search by field (separate boxes) — same look as the Filters panel ── */
+.fs-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.fs-hint { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fs-panel .filter-field > label { color: var(--text-muted); }
+.fs-input::placeholder { font-size: 13px; }
+.rp-fs { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--gray-light); }
+.rp-fs-toggle { width: 100%; text-align: left; flex-wrap: wrap; }
+.rp-fs .fs-grid { margin-top: 10px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.rp-fs .fs-input { background: #fff; }
+@media (max-width: 1100px) { .fs-hint { display: none; } }
