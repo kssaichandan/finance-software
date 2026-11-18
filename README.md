@@ -37,6 +37,8 @@ A fresh empty `finance.db` is created on first run, in the same folder as the `.
 
 ## Features
 
+- **v1.39 (1.37 look):** Dashboard tabs — *Today* (original layout + collected today, this month, next 7 days, payments just entered), *Business Overview* (money lent / collected / balance, profit & net earnings, this vs last month, 12-month charts, payment modes, loan health), *Overdue & Risk* (ageing, EMIs behind, biggest dues, period over, ending soon, never paid) and *Showroom & Area*; every box clicks through to its borrowers
+- **₹ Record Payment** from any screen, **live sidebar search**, **Collections (day book)** with totals by mode and by day, Excel and Print; one-click filter buttons and totals on Borrowers; backup reminder
 - **1.37 Extended:** search by **Key No, Engine No, Chassis No, Serial No**, alternate and guarantor phones (Borrowers search + sidebar search); Dashboard *Due Today* and *Missed — Last 10 Days* fixed; *Use EMI* button in Add Payment; *To Close Loan Today* amount; Excel export of the Borrowers list; duplicate vehicle / engine / chassis warning
 - Add borrowers with full loan, vehicle, and guarantor details (incl. alternate phones)
 - Record installment payments and overdue (O/D) penalty charges

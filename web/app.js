@@ -253,12 +253,52 @@ async function api(method, ...args) {
       const err = await res.text();
       throw new Error(err);
     }
-    return await res.json();
+    const out = await res.json();
+    // Any successful change makes the cached borrower list stale.
+    if (MUTATING_API.has(method) && out && out.success) _bCache = null;
+    return out;
   } catch (e) {
     toast(`API error: ${e.message || e}`, 'error');
     throw e;
   }
 }
+
+// ── Borrower list cache (search box, Record Payment picker) ──────
+const MUTATING_API = new Set([
+  'add_borrower', 'update_borrower', 'delete_borrower',
+  'add_payment', 'add_payments_batch', 'update_payment', 'delete_payment',
+  'add_penalty', 'update_penalty', 'delete_penalty',
+  'add_seizing', 'update_seizing', 'delete_seizing', 'close_loan', 'reopen_loan',
+]);
+let _bCache = null, _bCacheAt = 0;
+async function getBorrowersCached() {
+  // Re-fetch after any change, or after 60s (the date can roll over at midnight).
+  if (_bCache && Date.now() - _bCacheAt < 60000) return _bCache;
+  _bCache = await api('get_all_borrowers');
+  _bCacheAt = Date.now();
+  return _bCache;
+}
+
+// Rank borrowers for a typed search. Every word must match some field;
+// name-starts-with and exact book-no hits come first.
+function searchBorrowers(list, q, limit) {
+  const terms = (q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  const out = [];
+  for (const s of list || []) {
+    const fields = searchFields(s).map(x => x[1]);
+    if (!terms.every(t => fields.some(f => f.includes(t)))) continue;
+    let score = 0;
+    const n = (s.name || '').toLowerCase(), bk = (s.book_ref || '').toLowerCase();
+    if (bk && bk === terms[0]) score -= 100;
+    if (n.startsWith(terms[0])) score -= 50;
+    if (!s.closed) score -= 10;
+    out.push([score, s]);
+  }
+  out.sort((a, b) => a[0] - b[0] || (a[1].name || '').localeCompare(b[1].name || ''));
+  return out.slice(0, limit || 8).map(x => x[1]);
+}
+
 
 // ── Date helpers ─────────────────────────────────────────────────
 function jsAddMonths(dateStr, n) {
@@ -285,6 +325,10 @@ function localISO(d) {
 }
 function todayISO() { return localISO(new Date()); }
 // Whole days from `fromIso` to `toIso` (both YYYY-MM-DD).
+function addDaysISO(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return localISO(new Date(y, m - 1, d + n));
+}
 function daysBetween(fromIso, toIso) {
   const [a, b, c] = fromIso.split('-').map(Number);
   const [x, y, z] = toIso.split('-').map(Number);
@@ -405,7 +449,148 @@ function gotoOverdue() {
 // Global search (sidebar) — open the Borrowers list filtered to the typed text.
 function globalSearchGo(v) {
   searchQuery = (v || '').trim();
+  hideGlobalResults();
   navigate('borrowers');
+}
+
+// Live results under the sidebar search box: the best 8 matches as you type.
+// Click one (or press Enter on the highlighted one) to open that borrower.
+let _gsSel = 0, _gsItems = [];
+async function globalSearchInput(v) {
+  const box = document.getElementById('global-results');
+  if (!box) return;
+  const q = (v || '').trim();
+  if (!q) { hideGlobalResults(); return; }
+  let list = [];
+  try { list = await getBorrowersCached(); } catch (_) { return; }
+  const inp = document.getElementById('global-search');
+  if (!inp || inp.value.trim() !== q) return;   // user kept typing — a newer call will render
+  _gsItems = searchBorrowers(list, q, 8);
+  _gsSel = 0;
+  renderGlobalResults(q);
+}
+function renderGlobalResults(q) {
+  const box = document.getElementById('global-results');
+  if (!box) return;
+  if (!_gsItems.length) {
+    box.innerHTML = `<div class="gs-empty">No borrower matches “${esc(q)}”</div>`;
+  } else {
+    box.innerHTML = _gsItems.map((s, i) => `
+      <div class="gs-item ${i === _gsSel ? 'sel' : ''}" onmousedown="event.preventDefault(); pickGlobalResult(${i})">
+        <div class="gs-line1"><span class="gs-name">${esc(s.name)}</span>${s.book_ref ? `<span class="gs-book">${esc(s.book_ref)}</span>` : ''}</div>
+        <div class="gs-line2">${[s.phone, s.vehicle_no, s.address].filter(Boolean).map(esc).join(' · ') || '—'}</div>
+        <div class="gs-line3">${statusDot(s)}${s.is_overdue ? `<span class="gs-od">${money(s.overdue_amount)} overdue</span>` : ''}</div>
+      </div>`).join('') +
+      `<div class="gs-all" onmousedown="event.preventDefault(); globalSearchGo(document.getElementById('global-search').value)">See all results in Borrowers →</div>`;
+  }
+  box.classList.remove('hidden');
+}
+function pickGlobalResult(i) {
+  const s = _gsItems[i];
+  if (!s) return;
+  const inp = document.getElementById('global-search');
+  if (inp) { inp.value = ''; inp.blur(); }
+  hideGlobalResults();
+  showDetail(s.borrower_id);
+}
+function hideGlobalResults() {
+  const box = document.getElementById('global-results');
+  if (box) { box.classList.add('hidden'); box.innerHTML = ''; }
+}
+function globalSearchKey(e) {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!_gsItems.length) return;
+    e.preventDefault();
+    _gsSel = (_gsSel + (e.key === 'ArrowDown' ? 1 : -1) + _gsItems.length) % _gsItems.length;
+    renderGlobalResults(e.target.value.trim());
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_gsItems.length && e.target.value.trim()) pickGlobalResult(_gsSel);
+    else if (e.target.value.trim()) { globalSearchGo(e.target.value); e.target.value = ''; }
+  } else if (e.key === 'Escape') {
+    e.target.value = ''; hideGlobalResults(); e.target.blur();
+  }
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest || !e.target.closest('.sidebar-search')) hideGlobalResults();
+});
+
+// Small coloured dot + word for a borrower's standing (never colour alone).
+function statusDot(s) {
+  const map = { 'Overdue': 'danger', 'On time': 'success', 'Advance': 'primary', 'Closed': 'gray' };
+  return `<span class="sdot sdot-${map[s.status_label] || 'gray'}"></span><span class="sdot-label">${esc(s.status_label)}</span>`;
+}
+
+// ── Record Payment (from anywhere) ───────────────────────────────
+// Step 1: pick the borrower (type to search). Step 2: the normal Add Payment form.
+async function openRecordPayment(prefill) {
+  let list = [];
+  loading(true);
+  try { list = await getBorrowersCached(); }
+  catch (_) { return; }
+  finally { loading(false); }
+  document.getElementById('modal-inner').innerHTML = `
+    <div class="mini-modal rp-modal">
+      <div class="mm-head">
+        <h3>₹ Record a Payment</h3>
+        <button class="modal-close" onclick="closeModal()" title="Close">✕</button>
+      </div>
+      <p class="mm-lead">Step 1 of 2 — <b>Who paid?</b> Type their name, phone, vehicle number or book number.</p>
+      <input class="form-control rp-search" id="rp-search" type="text" autocomplete="off"
+        placeholder="Start typing… e.g. Ramesh, 98450…, KA-16, B12" value="${esc(prefill || '')}"
+        oninput="renderRecordPaymentList(this.value)" onkeydown="recordPaymentKey(event)" />
+      <div id="rp-list" class="rp-list"></div>
+    </div>`;
+  window._rpList = list;
+  openModal();
+  renderRecordPaymentList(prefill || '');
+  setTimeout(() => { const i = document.getElementById('rp-search'); if (i) i.focus(); }, 40);
+}
+let _rpSel = 0, _rpItems = [];
+function renderRecordPaymentList(q) {
+  const box = document.getElementById('rp-list');
+  if (!box) return;
+  const list = window._rpList || [];
+  q = (q || '').trim();
+  // No text yet → show running loans that are due / overdue first (the usual payers).
+  _rpItems = q ? searchBorrowers(list, q, 12)
+    : list.filter(s => !s.closed)
+          .map(s => [s.is_overdue ? 0 : (daysUntilDue(s) ?? 99) <= 3 ? 1 : 2, s])
+          .sort((a, b) => a[0] - b[0] || (a[1].name || '').localeCompare(b[1].name || ''))
+          .slice(0, 12).map(x => x[1]);
+  _rpSel = 0;
+  if (!_rpItems.length) {
+    box.innerHTML = `<div class="rp-empty">No borrower found. Check the spelling, or search by phone / book no.</div>`;
+    return;
+  }
+  box.innerHTML = (q ? '' : `<div class="rp-hint">Running loans — overdue &amp; due soon first</div>`) +
+    _rpItems.map((s, i) => `
+    <div class="rp-item ${i === _rpSel ? 'sel' : ''}" onclick="pickRecordPayment(${i})">
+      <div class="rp-main">
+        <div class="rp-name">${esc(s.name)} ${s.book_ref ? `<span class="book-ref-tag">${esc(s.book_ref)}</span>` : ''}</div>
+        <div class="rp-sub">${[s.phone, s.vehicle_no, s.address].filter(Boolean).map(esc).join(' · ') || '—'}</div>
+      </div>
+      <div class="rp-side">
+        <div>${statusDot(s)}</div>
+        <div class="rp-amt">${s.closed ? 'Closed' : s.is_overdue ? `<span class="t-danger">${money(s.overdue_amount)} overdue</span>` : `EMI ${money(s.installment_amount)}`}</div>
+      </div>
+      <span class="rp-go">Select →</span>
+    </div>`).join('');
+}
+function recordPaymentKey(e) {
+  if (!_rpItems.length) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    _rpSel = (_rpSel + (e.key === 'ArrowDown' ? 1 : -1) + _rpItems.length) % _rpItems.length;
+    document.querySelectorAll('#rp-list .rp-item').forEach((el, i) => el.classList.toggle('sel', i === _rpSel));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    pickRecordPayment(_rpSel);
+  }
+}
+function pickRecordPayment(i) {
+  const s = _rpItems[i];
+  if (s) showAddPayment(s.borrower_id);
 }
 
 // ── Navigation ───────────────────────────────────────────────────
@@ -418,15 +603,22 @@ function staleNav(my) { return my !== _navSeq; }
 async function navigate(view) {
   _navSeq++;
   currentView = view;
+  hideGlobalResults();
+  const gs = document.getElementById('global-search');
+  if (gs && document.activeElement !== gs) gs.value = '';
+  if (window._abScanTimer && view !== 'settings') { clearInterval(window._abScanTimer); window._abScanTimer = null; }
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
   });
   const container = document.getElementById('view');
   container.innerHTML = '';
+  const main = document.querySelector('.main-content');
+  if (main) main.scrollTop = 0;
   try {
     if (view === 'dashboard') await renderDashboard();
     else if (view === 'borrowers') await renderBorrowers();
     else if (view === 'add') renderAddBorrower();
+    else if (view === 'collections') await renderCollections();
     else if (view === 'portfolio') await renderPortfolio();
     else if (view === 'help') renderHelp();
     else if (view === 'settings') await renderSettings();
@@ -713,6 +905,7 @@ async function doBackup() {
   if (r && r.success) {
     toast('Backup saved → ' + r.path, 'success');
     if (currentView === 'settings') renderSettings();
+    else if (currentView === 'dashboard') refreshCurrentView();
   }
   else toast('Backup failed: ' + (r && r.error || 'unknown'), 'error');
 }
@@ -875,20 +1068,32 @@ async function refreshCurrentView() {
 }
 
 // ── Dashboard view ───────────────────────────────────────────────
+// Four tabs, all fed by ONE server call (get_dashboard_overview) so every
+// number uses the same "today" and the same per-loan figures as Borrowers.
+const DASH_TABS = [
+  ['today',    '📅', 'Today'],
+  ['business', '📊', 'Business Overview'],
+  ['risk',     '⚠️', 'Overdue & Risk'],
+  ['groups',   '🏪', 'Showroom & Area'],
+];
+let _dashTab = 'today';
+try { _dashTab = localStorage.getItem('dashTab') || 'today'; } catch (_) {}
+let _dashGroup = 'showroom';
+let _dashData = null;
+
 async function renderDashboard() {
   const my = _navSeq;
   loading(true);
-  let summaries;
-  try { summaries = await api('get_all_borrowers'); }
+  let d;
+  try { d = await api('get_dashboard_overview'); }
   finally { loading(false); }
   if (staleNav(my)) return;
-
-  const today = todayISO();
-  const todayFmt = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+  _dashData = d;
   const view = document.getElementById('view');
+  const todayFmt = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
 
-  // First-run / empty book → a friendly call to action, not two empty panels.
-  if (!summaries || summaries.length === 0) {
+  // First-run / empty book → a friendly call to action, not empty panels.
+  if (!d || !d.has_data) {
     view.innerHTML = `
       <div class="page-header">
         <div><div class="page-title">Dashboard</div><div class="page-subtitle">${todayFmt}</div></div>
@@ -902,29 +1107,7 @@ async function renderDashboard() {
       </div>`;
     return;
   }
-
-  // Due Today/Tomorrow — an installment falls due today (paid or not yet),
-  // or the next one is due tomorrow. On its due day an unpaid installment
-  // already counts as overdue, so "today" must not skip overdue borrowers.
-  const dueDays = s => (s.closed ? null : s.due_today ? 0 : (!s.is_overdue ? daysUntilDue(s, today) : null));
-  const dueToday = summaries.filter(s => {
-    const d = dueDays(s);
-    return d === 0 || d === 1;
-  }).sort((a, b) => (dueDays(a) - dueDays(b)) || ((a.due_today_paid ? 1 : 0) - (b.due_today_paid ? 1 : 0)));
-
-  // Recently missed — an installment's own due date passed 1–10 days ago and
-  // it is still unpaid. ("Days Overdue" is counted from the last covered
-  // installment, so it can't be used here — it is ~30 days on the first miss.)
-  const recentOverdue = summaries
-    .filter(s => s.is_overdue && s.days_since_missed >= 1 && s.days_since_missed <= 10)
-    .sort((a, b) => a.days_since_missed - b.days_since_missed);
-
-  const allOverdue = summaries.filter(s => s.is_overdue);
-  const longOverdue = allOverdue.filter(s => s.days_overdue > 10);
-  const toCollect = dueToday.filter(s => !s.due_today_paid).reduce((a, s) => a + (s.installment_amount || 0), 0);
-  const toCollectN = dueToday.filter(s => !s.due_today_paid).length;
-  const totalOverdueAmt = allOverdue.reduce((a, s) => a + s.overdue_amount, 0);
-  const activeCount = summaries.filter(s => !s.closed).length;
+  if (!DASH_TABS.some(t => t[0] === _dashTab)) _dashTab = 'today';
 
   view.innerHTML = `
     <div class="page-header">
@@ -936,103 +1119,619 @@ async function renderDashboard() {
         <button class="btn btn-outline" onclick="exportCSV()">⬇ Export CSV</button>
       </div>
     </div>
+    ${backupBanner(d.backup)}
+    <div class="tabs" role="tablist">
+      ${DASH_TABS.map(([k, ic, lbl]) => `
+        <button class="tab ${k === _dashTab ? 'active' : ''}" role="tab" aria-selected="${k === _dashTab}"
+          onclick="setDashTab('${k}')"><span class="tab-ic">${ic}</span>${lbl}${k === 'risk' && d.overdue.count ? `<span class="tab-badge">${d.overdue.count}</span>` : ''}</button>`).join('')}
+    </div>
+    <div id="dash-body"></div>`;
+  renderDashTab();
+}
 
+function setDashTab(k) {
+  _dashTab = k;
+  try { localStorage.setItem('dashTab', k); } catch (_) {}
+  document.querySelectorAll('.tabs .tab').forEach((el, i) => {
+    const on = DASH_TABS[i][0] === k;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-selected', on);
+  });
+  renderDashTab();
+}
+
+function renderDashTab() {
+  const body = document.getElementById('dash-body');
+  if (!body || !_dashData) return;
+  const d = _dashData;
+  if (_dashTab === 'business') body.innerHTML = dashBusiness(d);
+  else if (_dashTab === 'risk') body.innerHTML = dashRisk(d);
+  else if (_dashTab === 'groups') body.innerHTML = dashGroups(d);
+  else body.innerHTML = dashToday(d);
+}
+
+// Nudge to back up when it has never been done / not for a week and the
+// automatic cloud backup is off (or its last attempt failed).
+function backupBanner(b) {
+  if (!b) return '';
+  const st = b.auto_status || {};
+  if (b.auto_enabled && st.ok === false) {
+    return `<div class="banner banner-danger"><span>⚠ The last automatic backup failed (${esc(st.error || 'unknown')}).</span>
+      <button class="btn btn-sm btn-outline" onclick="navigate('settings')">Check backup settings →</button></div>`;
+  }
+  if (b.auto_enabled) return '';
+  const last = b.last_manual ? b.last_manual.slice(0, 10) : '';
+  const age = last ? daysBetween(last, todayISO()) : null;
+  if (age !== null && age < 7) return '';
+  return `<div class="banner banner-warn"><span>💾 ${last ? `Your last backup was <b>${age} days ago</b>.` : `You have <b>not backed up</b> your data yet.`}
+    A backup protects you if this computer breaks.</span>
+    <button class="btn btn-sm btn-primary" onclick="doBackup()">Back up now</button>
+    <button class="btn btn-sm btn-ghost" onclick="navigate('settings')">Turn on automatic backup</button></div>`;
+}
+
+// ── Drill-down: open the Borrowers list with a filter already applied ──
+function drill(opts) {
+  filters = defaultFilters();
+  Object.assign(filters, opts || {});
+  searchQuery = '';
+  receiptQuery = '';
+  _filtersOpen = false;
+  navigate('borrowers');
+}
+function drillGroup(kind, name) {
+  if (kind === 'showroom') drill({ showroom: name });
+  else if (kind === 'place') drill({ place: name });
+  else drill({ vehicleType: name });
+}
+function drillDays(min, max) {
+  const custom = [{ field: 'days_overdue', op: 'gte', value: String(min) }];
+  if (max !== null && max !== undefined) custom.push({ field: 'days_overdue', op: 'lte', value: String(max) });
+  drill({ standing: 'overdue', custom });
+}
+
+function pct(a, b) { return b > 0 ? Math.round((a / b) * 100) : 0; }
+
+// Short Indian money for chart axes: ₹1.2Cr, ₹4.5L, ₹12K.
+function moneyShort(v) {
+  v = Math.round(v || 0);
+  const a = Math.abs(v), s = v < 0 ? '-' : '';
+  const trim = x => x.toFixed(1).replace(/\.0$/, '');
+  if (a >= 1e7) return `${s}₹${trim(a / 1e7)}Cr`;
+  if (a >= 1e5) return `${s}₹${trim(a / 1e5)}L`;
+  if (a >= 1e3) return `${s}₹${trim(a / 1e3)}K`;
+  return `${s}₹${a}`;
+}
+
+function kpi(o) {
+  // o: {label, value, sub, cls, onclick, tip}
+  const click = o.onclick ? ` clickable" onclick="${o.onclick}" role="button" tabindex="0"` : '"';
+  return `
+    <div class="kpi-card ${o.cls || ''}${click} ${o.tip ? `data-tip="${esc(o.tip)}"` : ''}>
+      <div class="kpi-card-label">${o.label}</div>
+      <div class="kpi-card-value">${o.value}</div>
+      ${o.sub ? `<div class="kpi-card-sub">${o.sub}</div>` : ''}
+      ${o.onclick ? `<div class="kpi-card-go">View →</div>` : ''}
+    </div>`;
+}
+
+function remindBtn(s, kind) {
+  if (!s.phone) return '';
+  const amt = kind === 'overdue' ? s.overdue_amount : s.installment_amount;
+  return `<button class="icon-btn wa" title="Send WhatsApp reminder"
+    data-phone="${esc(s.phone)}" data-name="${esc(s.name)}" data-amt="${esc(money(amt))}" data-kind="${kind}"
+    onclick="event.stopPropagation(); remindFromBtn(this)">💬</button>`;
+}
+function payBtn(s) {
+  return `<button class="icon-btn pay" title="Record a payment from ${esc(s.name)}"
+    onclick="event.stopPropagation(); showAddPayment(${s.borrower_id})">₹</button>`;
+}
+
+function personRow(s, right, opts) {
+  opts = opts || {};
+  return `
+    <div class="prow ${opts.cls || ''}" onclick="showDetail(${s.borrower_id})" title="Open ${esc(s.name)}">
+      <div class="prow-main">
+        <div class="prow-name">${esc(s.name)} ${s.book_ref ? `<span class="book-ref-tag">${esc(s.book_ref)}</span>` : ''}</div>
+        <div class="prow-sub">${[s.phone ? '📞 ' + s.phone : '', s.vehicle_no, s.address].filter(Boolean).map(esc).join(' · ') || '—'}</div>
+      </div>
+      <div class="prow-right">${right}</div>
+      <div class="prow-actions">${opts.remind ? remindBtn(s, opts.remind) : ''}${opts.pay ? payBtn(s) : ''}</div>
+    </div>`;
+}
+
+function listCard(title, cls, count, inner, foot) {
+  return `
+    <div class="list-card ${cls}">
+      <div class="list-card-head"><span class="list-card-title">${title}</span>${count !== null ? `<span class="list-card-count">${count}</span>` : ''}</div>
+      <div class="list-card-body">${inner}</div>
+      ${foot ? `<div class="list-card-foot">${foot}</div>` : ''}
+    </div>`;
+}
+
+// ── Tab 1: Today — the original 1.37 Dashboard layout (same cards, same
+// lists) fed from the server's numbers, plus a second row of cards/lists in
+// the very same style for the new figures.
+function dashToday(d) {
+  const today = d.today;
+  const c = d.collected || {};
+  // Due Today & Tomorrow — an installment falls due today (paid or not), or
+  // the next one is due tomorrow for a borrower who is not behind.
+  const dueToday = (d.due_today || []).map(s => Object.assign({ _d: 0 }, s))
+    .concat((d.due_tomorrow || []).filter(s => !s.is_overdue).map(s => Object.assign({ _d: 1 }, s)))
+    .sort((a, b) => (a._d - b._d) || ((a.due_today_paid ? 1 : 0) - (b.due_today_paid ? 1 : 0)));
+  const unpaid = dueToday.filter(s => !s.due_today_paid);
+  const toCollect = unpaid.reduce((a, s) => a + (s.installment_amount || 0), 0);
+  const recentOverdue = d.missed_recent || [];
+  const od = d.overdue || {};
+  const t = d.target || {};
+  const mPct = pct(c.month || 0, t.amount || 0);
+  const vsLast = c.last_mtd > 0 ? Math.round(((c.month - c.last_mtd) / c.last_mtd) * 100) : null;
+  const week = d.due_week || [];
+  const weekAmt = (d.due_tomorrow || []).filter(s => !s.is_overdue).reduce((a, s) => a + s.installment_amount, 0) + (d.due_week_amount || 0);
+  const weekN = (d.due_tomorrow || []).filter(s => !s.is_overdue).length + week.length;
+
+  const card = (s, kind, right) => `
+    <div class="dash-card ${kind === 'overdue' ? 'overdue-card' : 'due-card'}" onclick="showDetail(${s.borrower_id})">
+      <div class="dash-card-top">
+        <span class="dash-name">${esc(s.name)}</span>
+        ${s.book_ref ? `<span class="book-ref-tag">${esc(s.book_ref)}</span>` : ''}
+      </div>
+      <div class="dash-card-mid">
+        <span class="dash-phone">📞 ${esc(s.phone) || '—'}</span>
+        <span class="dash-vehicle">${esc(s.vehicle_no) || ''}</span>
+      </div>
+      <div class="dash-card-bot">${right}</div>
+    </div>`;
+  const remind = (s, kind, amt) => s.phone ? `<button class="dash-remind" title="Send WhatsApp reminder"
+      data-phone="${esc(s.phone)}" data-name="${esc(s.name)}" data-amt="${esc(money(amt))}" data-kind="${kind}"
+      onclick="event.stopPropagation(); remindFromBtn(this)">💬</button>` : '';
+
+  const dueHtml = dueToday.length === 0
+    ? `<div class="dash-empty">No payments due today or tomorrow</div>`
+    : dueToday.map(s => {
+        const paid = s._d === 0 && s.due_today_paid;
+        const dLabel = paid ? '✓ Paid today' : s._d === 0 ? 'Due Today' : 'Due Tomorrow';
+        const dStyle = paid ? 'background:#e2e8f0;color:#334155'
+          : s._d === 0 ? 'background:#bbf7d0;color:#15803d' : 'background:#fef9c3;color:#b45309';
+        return card(s, 'due', `
+          <span class="dash-amount due-amount">${money(s.installment_amount)} due</span>
+          <span class="dash-card-actions">${paid ? '' : remind(s, 'due', s.installment_amount)}
+            <span class="dash-days" style="${dStyle}">${dLabel}</span></span>`);
+      }).join('');
+
+  const missedHtml = recentOverdue.length === 0
+    ? `<div class="dash-empty">No one became overdue in the last 10 days</div>`
+    : recentOverdue.map(s => card(s, 'overdue', `
+          <span class="dash-amount overdue-amount">${money(s.overdue_amount)} overdue</span>
+          <span class="dash-card-actions">${remind(s, 'overdue', s.overdue_amount)}
+            <span class="dash-days">${s.days_since_missed}d ago</span></span>`)).join('');
+
+  const weekHtml = week.length === 0
+    ? `<div class="dash-empty">Nothing else due in the next 7 days</div>`
+    : week.map(s => card(s, 'due', `
+          <span class="dash-amount due-amount">${money(s.installment_amount)} due</span>
+          <span class="dash-card-actions">${remind(s, 'due', s.installment_amount)}
+            <span class="dash-days" style="background:#e0e7ff;color:#3730a3">in ${s.days_until_next} days · ${fmtDate(s.next_due_date)}</span></span>`)).join('');
+
+  const rec = d.recent_payments || [];
+  const recHtml = rec.length === 0
+    ? `<div class="dash-empty">No payments recorded yet</div>`
+    : rec.map(p => `
+      <div class="dash-card due-card" onclick="showDetail(${p.borrower_id})">
+        <div class="dash-card-top">
+          <span class="dash-name">${esc(p.name)}</span>
+          ${p.book_ref ? `<span class="book-ref-tag">${esc(p.book_ref)}</span>` : ''}
+        </div>
+        <div class="dash-card-bot">
+          <span class="dash-amount due-amount">${money(p.amount)}</span>
+          <span class="dash-card-actions">${p.mode ? modePill(p.mode) : ''}
+            <span class="dash-hint">${fmtDate(p.date)}${p.receipt_no ? ' · ' + esc(p.receipt_no) : ''}</span></span>
+        </div>
+      </div>`).join('');
+
+  return `
     <div class="stat-grid dash-stats">
       <div class="stat-card success">
         <div class="stat-label">To Collect — Today &amp; Tomorrow</div>
         <div class="stat-value success stat-value-md">${money(toCollect)}</div>
-        <div class="stat-sub">${toCollectN} installment${toCollectN !== 1 ? 's' : ''} still to collect${dueToday.length > toCollectN ? ` · ${dueToday.length - toCollectN} already paid today` : ''}</div>
+        <div class="stat-sub">${unpaid.length} installment${unpaid.length !== 1 ? 's' : ''} still to collect${dueToday.length > unpaid.length ? ` · ${dueToday.length - unpaid.length} already paid today` : ''}</div>
       </div>
-      <div class="stat-card ${allOverdue.length ? 'danger' : 'gray'} clickable" onclick="gotoOverdue()" title="View all overdue borrowers">
+      <div class="stat-card ${od.count ? 'danger' : 'gray'} clickable" onclick="gotoOverdue()" title="View all overdue borrowers">
         <div class="stat-label">Overdue (all)</div>
-        <div class="stat-value ${allOverdue.length ? 'danger' : ''} stat-value-md">${money(totalOverdueAmt)}</div>
-        <div class="stat-sub">${allOverdue.length} borrower${allOverdue.length !== 1 ? 's' : ''}${longOverdue.length ? ` · ${longOverdue.length} over 10 days` : ''} · View all →</div>
+        <div class="stat-value ${od.count ? 'danger' : ''} stat-value-md">${money(od.amount || 0)}</div>
+        <div class="stat-sub">${od.count || 0} borrower${od.count !== 1 ? 's' : ''}${od.over10 ? ` · ${od.over10} over 10 days` : ''} · View all →</div>
       </div>
       <div class="stat-card gray">
         <div class="stat-label">Active Loans</div>
-        <div class="stat-value stat-value-md">${activeCount}</div>
-        <div class="stat-sub">${summaries.length} total in your book</div>
+        <div class="stat-value stat-value-md">${d.counts.active}</div>
+        <div class="stat-sub">${d.counts.total} total in your book</div>
+      </div>
+    </div>
+    <div class="stat-grid dash-stats">
+      <div class="stat-card success clickable" onclick="openCollections('today')" title="See today's payments">
+        <div class="stat-label">Collected Today</div>
+        <div class="stat-value success stat-value-md">${money(c.today || 0)}</div>
+        <div class="stat-sub">${c.today_n || 0} payment${c.today_n !== 1 ? 's' : ''} · yesterday ${money(c.yesterday || 0)} · View →</div>
+      </div>
+      <div class="stat-card primary clickable" onclick="openCollections('month')" title="See this month's payments">
+        <div class="stat-label">${esc(d.this_month_label)} So Far</div>
+        <div class="stat-value primary stat-value-md">${money(c.month || 0)}</div>
+        <div class="stat-sub">${t.amount > 0 ? `${mPct}% of ${money(t.amount)} EMIs due this month` : `${c.month_n || 0} payments`}${vsLast !== null ? ` · <span style="color:${vsLast >= 0 ? 'var(--success)' : 'var(--danger)'}">${vsLast >= 0 ? '▲' : '▼'} ${Math.abs(vsLast)}% vs same date last month</span>` : ''}</div>
+      </div>
+      <div class="stat-card gray clickable" onclick="drill({due:'d7'})" title="Borrowers due in the next 7 days">
+        <div class="stat-label">Expected — Next 7 Days</div>
+        <div class="stat-value stat-value-md">${money(weekAmt)}</div>
+        <div class="stat-sub">${weekN} installment${weekN !== 1 ? 's' : ''} (borrowers not behind) · View →</div>
       </div>
     </div>
 
     <div class="dash-grid">
-
       <div class="dash-section">
         <div class="dash-section-header due-today-header">
           <span class="dash-section-title">Due Today &amp; Tomorrow</span>
           <span class="dash-section-count">${dueToday.length} borrower${dueToday.length !== 1 ? 's' : ''}</span>
         </div>
-        <div class="dash-section-body">
-          ${dueToday.length === 0
-            ? `<div class="dash-empty">No payments due today or tomorrow</div>`
-            : dueToday.map(s => {
-                const dLeft = dueDays(s);
-                const paid = dLeft === 0 && s.due_today_paid;
-                const dLabel = paid ? '✓ Paid today' : dLeft === 0 ? 'Due Today' : 'Due Tomorrow';
-                const dStyle = paid
-                  ? 'background:#e2e8f0;color:#334155'
-                  : dLeft === 0
-                  ? 'background:#bbf7d0;color:#15803d'
-                  : 'background:#fef9c3;color:#b45309';
-                return `
-              <div class="dash-card due-card" onclick="showDetail(${s.borrower_id})">
-                <div class="dash-card-top">
-                  <span class="dash-name">${esc(s.name)}</span>
-                  ${s.book_ref ? `<span class="book-ref-tag">${esc(s.book_ref)}</span>` : ''}
-                </div>
-                <div class="dash-card-mid">
-                  <span class="dash-phone">📞 ${esc(s.phone) || '—'}</span>
-                  <span class="dash-vehicle">${esc(s.vehicle_no) || ''}</span>
-                </div>
-                <div class="dash-card-bot">
-                  <span class="dash-amount due-amount">${money(s.installment_amount)} due</span>
-                  <span class="dash-card-actions">
-                    ${s.phone ? `<button class="dash-remind" title="Send WhatsApp reminder"
-                      data-phone="${esc(s.phone)}" data-name="${esc(s.name)}" data-amt="${esc(money(s.installment_amount))}" data-kind="due"
-                      onclick="event.stopPropagation(); remindFromBtn(this)">💬</button>` : ''}
-                    <span class="dash-days" style="${dStyle}">${dLabel}</span>
-                  </span>
-                </div>
-              </div>`}).join('')}
-        </div>
+        <div class="dash-section-body">${dueHtml}</div>
       </div>
-
       <div class="dash-section">
         <div class="dash-section-header overdue-header">
           <span class="dash-section-title">Missed — Last 10 Days</span>
           <span class="dash-section-count">${recentOverdue.length} borrower${recentOverdue.length !== 1 ? 's' : ''}</span>
         </div>
-        <div class="dash-section-body">
-          ${recentOverdue.length === 0
-            ? `<div class="dash-empty">No one became overdue in the last 10 days</div>`
-            : recentOverdue.map(s => `
-              <div class="dash-card overdue-card" onclick="showDetail(${s.borrower_id})">
-                <div class="dash-card-top">
-                  <span class="dash-name">${esc(s.name)}</span>
-                  ${s.book_ref ? `<span class="book-ref-tag">${esc(s.book_ref)}</span>` : ''}
-                </div>
-                <div class="dash-card-mid">
-                  <span class="dash-phone">📞 ${esc(s.phone) || '—'}</span>
-                  <span class="dash-vehicle">${esc(s.vehicle_no) || ''}</span>
-                </div>
-                <div class="dash-card-bot">
-                  <span class="dash-amount overdue-amount">${money(s.overdue_amount)} overdue</span>
-                  <span class="dash-card-actions">
-                    ${s.phone ? `<button class="dash-remind" title="Send WhatsApp reminder"
-                      data-phone="${esc(s.phone)}" data-name="${esc(s.name)}" data-amt="${esc(money(s.overdue_amount))}" data-kind="overdue"
-                      onclick="event.stopPropagation(); remindFromBtn(this)">💬</button>` : ''}
-                    <span class="dash-days">${s.days_since_missed}d ago</span>
-                  </span>
-                </div>
-              </div>`).join('')}
-        </div>
+        <div class="dash-section-body">${missedHtml}</div>
       </div>
-
     </div>
-  `;
+
+    <div class="dash-grid" style="margin-top:20px">
+      <div class="dash-section">
+        <div class="dash-section-header week-header">
+          <span class="dash-section-title">Due in the Next 7 Days</span>
+          <span class="dash-section-count">${week.length} borrower${week.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="dash-section-body">${weekHtml}</div>
+      </div>
+      <div class="dash-section">
+        <div class="dash-section-header recent-header">
+          <span class="dash-section-title">Payments Just Entered</span>
+          <span class="dash-section-count clickable" onclick="openCollections('today')">Today's collections →</span>
+        </div>
+        <div class="dash-section-body">${recHtml}</div>
+      </div>
+    </div>`;
 }
 
+// ── Tab 2: Business overview ────────────────────────────────────
+function dashBusiness(d) {
+  const m = d.money, c = d.collected, cnt = d.counts;
+  const money1 = `
+    <div class="section-title-row"><h3 class="sec-title">💰 Your money at a glance</h3><span class="sec-hint">All loans, all time</span></div>
+    <div class="kpi-grid">
+      ${kpi({ label: 'Total money lent', value: money(m.total_principal), sub: `${cnt.total} loans given`, cls: 'k-primary',
+              tip: 'Principal of every loan you have ever given' })}
+      ${kpi({ label: 'Total collected', value: money(c.all_time), sub: 'All installment payments received', cls: 'k-success',
+              onclick: "openCollections('all')" })}
+      ${kpi({ label: 'Balance still to collect', value: money(m.balance), sub: `from ${cnt.active} running loans`, cls: 'k-warn',
+              onclick: "drill({status:'active'})", tip: 'What running loans still have to pay (principal + interest)' })}
+      ${kpi({ label: 'Profit earned so far', value: money(m.interest_earned), sub: 'Interest part of money collected', cls: 'k-success',
+              tip: 'Each payment is split into interest and principal using that loan\'s own interest ratio' })}
+    </div>
+    <div class="money-split card">
+      <div class="ms-row">
+        <div class="ms-item"><div class="ms-val">${money(m.capital_out)}</div><div class="ms-lbl">Your capital still with customers</div></div>
+        <div class="ms-op">+</div>
+        <div class="ms-item"><div class="ms-val">${money(m.interest_to_come)}</div><div class="ms-lbl">Interest still to come</div></div>
+        <div class="ms-op">=</div>
+        <div class="ms-item strong"><div class="ms-val">${money(m.balance)}</div><div class="ms-lbl">Balance to collect</div></div>
+      </div>
+      <div class="ms-row ms-row2">
+        <div class="ms-item"><div class="ms-val t-success">${money(m.interest_earned)}</div><div class="ms-lbl">Interest earned</div></div>
+        <div class="ms-op">+</div>
+        <div class="ms-item"><div class="ms-val t-success">${money(m.penalties)}</div><div class="ms-lbl">Penalties collected</div></div>
+        <div class="ms-op">−</div>
+        <div class="ms-item"><div class="ms-val t-danger">${money(m.seizings)}</div><div class="ms-lbl">Seizing / recovery spent</div></div>
+        <div class="ms-op">=</div>
+        <div class="ms-item strong"><div class="ms-val">${money(m.net_earned)}</div><div class="ms-lbl">Net earnings so far</div></div>
+      </div>
+    </div>`;
+
+  const tr = d.trend || [];
+  const last = tr.length >= 2 ? tr[tr.length - 2] : null;
+  const cur = tr.length ? tr[tr.length - 1] : null;
+  const cmpRow = (label, a, b, isMoney = true, invert = false) => {
+    const fa = isMoney ? money(a) : a, fb = isMoney ? money(b) : b;
+    let ch = '';
+    if (b > 0) {
+      const p = Math.round(((a - b) / b) * 100);
+      const good = invert ? p <= 0 : p >= 0;
+      ch = `<span class="${good ? 't-success' : 't-danger'}">${p >= 0 ? '▲' : '▼'} ${Math.abs(p)}%</span>`;
+    } else if (a > 0) ch = '<span class="t-muted">new</span>';
+    else ch = '<span class="t-muted">—</span>';
+    return `<tr><td>${label}</td><td class="num"><b>${fa}</b></td><td class="num">${fb}</td><td class="num">${ch}</td></tr>`;
+  };
+  const compare = (cur && last) ? `
+    <div class="card">
+      <div class="card-header"><span class="card-title">📆 This month vs last month</span>
+        <span class="sec-hint">${esc(d.this_month_label)} is still running — by this date last month you had collected <b>${money(c.last_mtd)}</b></span></div>
+      <div class="table-wrap"><table class="data-table compact">
+        <thead><tr><th></th><th class="num">${esc(d.this_month_label)} (so far)</th><th class="num">${esc(d.last_month_label)}</th><th class="num">Change</th></tr></thead>
+        <tbody>
+          ${cmpRow('💵 Money collected', cur.collected, last.collected)}
+          ${cmpRow('📈 Interest earned (profit)', cur.interest, last.interest)}
+          ${cmpRow('🧾 Number of payments', cur.payments, last.payments, false)}
+          ${cmpRow('➕ New loans given', cur.new_loans, last.new_loans, false)}
+          ${cmpRow('💸 Money lent in new loans', cur.new_principal, last.new_principal)}
+          ${cmpRow('⚠ Penalties collected', cur.penalties, last.penalties)}
+          ${cmpRow('🚚 Seizing spent', cur.seizings, last.seizings, true, true)}
+        </tbody>
+      </table></div>
+    </div>` : '';
+
+  const charts = `
+    <div class="chart-grid">
+      <div class="card chart-card">
+        <div class="card-header"><span class="card-title">💵 Money collected — last 12 months</span></div>
+        ${columnChart(tr, 'collected', r => [`<b>${esc(r.label)}</b>`, `Collected: ${money(r.collected)}`, `Interest (profit): ${money(r.interest)}`, `${r.payments} payment(s)`])}
+      </div>
+      <div class="card chart-card">
+        <div class="card-header"><span class="card-title">💸 New loans given — last 12 months</span></div>
+        ${columnChart(tr, 'new_principal', r => [`<b>${esc(r.label)}</b>`, `Lent: ${money(r.new_principal)}`, `${r.new_loans} new loan(s)`], 'alt')}
+      </div>
+    </div>
+    <details class="card table-toggle">
+      <summary>📋 Show these numbers as a table</summary>
+      <div class="table-wrap"><table class="data-table compact">
+        <thead><tr><th>Month</th><th class="num">Collected</th><th class="num">Interest</th><th class="num">Payments</th><th class="num">New loans</th><th class="num">Lent</th><th class="num">Penalties</th><th class="num">Seizing</th></tr></thead>
+        <tbody>${tr.slice().reverse().map(r => `<tr><td>${esc(r.label)}</td><td class="num">${money(r.collected)}</td><td class="num">${money(r.interest)}</td><td class="num">${r.payments}</td><td class="num">${r.new_loans}</td><td class="num">${money(r.new_principal)}</td><td class="num">${money(r.penalties)}</td><td class="num">${money(r.seizings)}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </details>`;
+
+  const modes = d.modes_month || [];
+  const modeTot = modes.reduce((a, x) => a + x.amount, 0);
+  const modeMax = Math.max(1, ...modes.map(x => x.amount));
+  const modeHtml = modes.length ? modes.map(x => `
+    <div class="hbar-row">
+      <div class="hbar-label">${x.mode === 'Not recorded' ? 'Not recorded' : modeIconFor(x.mode) + ' ' + esc(x.mode)}</div>
+      <div class="hbar-track"><div class="hbar-fill" style="width:${Math.max(1, pct(x.amount, modeMax))}%"></div></div>
+      <div class="hbar-val">${money(x.amount)} <span class="t-muted">${pct(x.amount, modeTot)}%</span></div>
+    </div>`).join('') : `<div class="list-empty">No payments yet this month</div>`;
+
+  const healthDefs = [
+    ['overdue', 'danger', 'Overdue', 'Behind on payments', "drill({standing:'overdue'})"],
+    ['on_time', 'success', 'On time', 'Paying on schedule', "drill({standing:'ontime'})"],
+    ['advance', 'primary', 'Advance', 'Paid ahead', "drill({standing:'advance'})"],
+    ['closed', 'gray', 'Closed', 'Fully cleared', "drill({status:'closed'})"],
+  ];
+  const tot = cnt.total || 1;
+  const health = `
+    <div class="lh-bar big">${healthDefs.map(([k, cls, lbl]) => cnt[k] ? `<div class="lh-seg lh-${cls}" style="width:${(cnt[k] / tot) * 100}%" data-tip="${lbl}: ${cnt[k]} loan(s)"></div>` : '').join('')}</div>
+    <div class="lh-legend">${healthDefs.map(([k, cls, lbl, sub, on]) => `
+      <div class="lh-leg clickable" onclick="${on}"><span class="sdot sdot-${cls}"></span><b>${cnt[k]}</b> ${lbl} <span class="t-muted">· ${sub} · ${pct(cnt[k], tot)}%</span></div>`).join('')}</div>`;
+
+  return `
+    ${money1}
+    ${compare}
+    ${charts}
+    <div class="two-col">
+      <div class="card">
+        <div class="card-header"><span class="card-title">💳 How customers paid — ${esc(d.this_month_label)}</span></div>
+        <div class="pad">${modeHtml}</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">❤️ Loan health — where your book stands</span></div>
+        <div class="pad">${health}</div>
+      </div>
+    </div>
+    <div class="mini-stats">
+      <div class="mini-stat clickable" onclick="drill({status:'closed'})"><b>${d.closed_this_month}</b> loan(s) fully paid this month</div>
+      <div class="mini-stat"><b>${d.new_loans_month.count}</b> new loan(s) this month · ${money(d.new_loans_month.principal)}</div>
+      <div class="mini-stat"><b>${money(m.net_month)}</b> net earnings this month <span class="t-muted">(interest + penalties − seizing)</span></div>
+    </div>`;
+}
+
+// Single-series column chart (SVG). Bars ≤ 24px, rounded data-end, hairline
+// baseline, 3 recessive gridlines, hover tooltip via data-tip on a wide hit area.
+function columnChart(rows, key, tipFn, variant) {
+  rows = rows || [];
+  if (!rows.length) return `<div class="list-empty">No data yet</div>`;
+  const W = 520, H = 220, padL = 56, padR = 8, padT = 12, padB = 30;
+  const max = Math.max(1, ...rows.map(r => r[key] || 0));
+  // Nice round top for the axis
+  const raw = max / 3, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw) || 10 * mag;
+  const top = step * 3;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const band = plotW / rows.length;
+  const bw = Math.min(24, band * 0.6);
+  let grid = '';
+  for (let i = 0; i <= 3; i++) {
+    const v = top * i / 3, y = padT + plotH - (v / top) * plotH;
+    grid += `<line x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}" class="${i === 0 ? 'ax-base' : 'ax-grid'}"/>` +
+            `<text x="${padL - 6}" y="${y + 4}" class="ax-label" text-anchor="end">${moneyShort(v)}</text>`;
+  }
+  const curIdx = rows.length - 1;
+  const bars = rows.map((r, i) => {
+    const v = r[key] || 0;
+    const h = Math.max(v > 0 ? 2 : 0, (v / top) * plotH);
+    const x = padL + band * i + (band - bw) / 2, y = padT + plotH - h;
+    const rr = Math.min(4, h, bw / 2);
+    const path = h > 0
+      ? `M${x},${y + h} L${x},${y + rr} Q${x},${y} ${x + rr},${y} L${x + bw - rr},${y} Q${x + bw},${y} ${x + bw},${y + rr} L${x + bw},${y + h} Z`
+      : '';
+    const lbl = (r.label || '').split(' ');
+    const tip = esc(tipFn(r).join('<br>'));
+    return `<g class="bar-g" data-tip="${tip}" data-tip-html="1">
+      <rect x="${padL + band * i}" y="${padT}" width="${band}" height="${plotH}" class="bar-hit"/>
+      ${path ? `<path d="${path}" class="bar ${variant === 'alt' ? 'bar-alt' : ''}"/>` : ''}
+      <text x="${padL + band * i + band / 2}" y="${H - 14}" class="ax-label ${i === curIdx ? 'ax-cur' : ''}" text-anchor="middle">${esc(lbl[0] || '')}</text>
+      <text x="${padL + band * i + band / 2}" y="${H - 2}" class="ax-label ax-year" text-anchor="middle">${i === 0 || lbl[0] === 'Jan' ? esc(lbl[1] || '') : ''}</text>
+    </g>`;
+  }).join('');
+  return `<div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" class="col-chart" role="img" aria-label="Column chart">${grid}${bars}</svg></div>`;
+}
+
+// ── Tab 3: Overdue & risk ───────────────────────────────────────
+function dashRisk(d) {
+  const o = d.overdue;
+  const bucketCls = ['k-warn', 'k-orange', 'k-danger', 'k-dark'];
+  const buckets = (o.buckets || []).map((b, i) => kpi({
+    label: `⏱ ${b.label} overdue`, value: money(b.amount), cls: bucketCls[i] || '',
+    sub: `${b.count} borrower${b.count !== 1 ? 's' : ''}`,
+    onclick: `drillDays(${b.min}, ${b.max === null ? 'null' : b.max})`,
+    tip: 'Grouped by "Days Overdue" — the same number shown on each borrower',
+  })).join('');
+  const bh = o.behind || {};
+  const behind = `
+    <div class="mini-stats">
+      <div class="mini-stat"><b>${bh.one || 0}</b> behind by up to 1 EMI</div>
+      <div class="mini-stat"><b>${bh.two || 0}</b> behind by up to 2 EMIs</div>
+      <div class="mini-stat danger"><b>${bh.three_plus || 0}</b> behind by more than 2 EMIs</div>
+      <div class="mini-stat clickable" onclick="drill({hasSeizing:true})"><b>${d.seized_count}</b> with seizing / recovery costs →</div>
+    </div>`;
+
+  const top = (o.top || []);
+  const topRows = top.length ? top.map((s, i) => `
+    <tr onclick="showDetail(${s.borrower_id})">
+      <td class="t-muted">${i + 1}</td>
+      <td><strong>${esc(s.name)}</strong> ${s.book_ref ? `<span class="book-ref-tag">${esc(s.book_ref)}</span>` : ''}<div class="cell-sub">${esc(s.address || '')}</div></td>
+      <td>${esc(s.phone) || '—'}</td>
+      <td class="num t-danger"><b>${money(s.overdue_amount)}</b></td>
+      <td class="num">${s.days_overdue} days</td>
+      <td class="num">${fmtInst(s.emis_behind)}</td>
+      <td class="num">${money(s.remaining)}</td>
+      <td class="action-cell">${remindBtn(s, 'overdue')}${payBtn(s)}</td>
+    </tr>`).join('') : `<tr class="no-data"><td colspan="8">Nobody is overdue 🎉</td></tr>`;
+
+  const pe = d.past_end || { count: 0, amount: 0, list: [] };
+  const peHtml = pe.list.length ? pe.list.map(s => personRow(s,
+      `<div class="prow-amt t-danger">${money(s.remaining)}</div><div class="prow-note">ended ${fmtDate(s.last_due_date)}</div>`,
+      { remind: 'overdue', pay: true })).join('')
+    : `<div class="list-empty">No loan is past its end date with money left 👍</div>`;
+  const es = d.ending_soon || { count: 0, list: [] };
+  const esHtml = es.list.length ? es.list.map(s => personRow(s,
+      `<div class="prow-amt">${money(s.remaining)} left</div><div class="prow-note">ends ${fmtDate(s.last_due_date)}</div>`)).join('')
+    : `<div class="list-empty">No loan ends in the next 30 days</div>`;
+  const np = d.no_payment_yet || { count: 0, list: [] };
+  const npHtml = np.list.length ? np.list.map(s => personRow(s,
+      `<div class="prow-amt t-danger">${money(s.overdue_amount)}</div><div class="prow-note">${s.days_overdue} days</div>`,
+      { remind: 'overdue', pay: true })).join('')
+    : `<div class="list-empty">Every running loan has made at least one payment 👍</div>`;
+
+  return `
+    <div class="section-title-row"><h3 class="sec-title">⏱ How long money has been overdue</h3>
+      <span class="sec-hint">Total overdue <b class="t-danger">${money(o.amount)}</b> from ${o.count} borrower(s) — click a box to see who</span></div>
+    <div class="kpi-grid">${buckets}</div>
+    ${behind}
+    <div class="card">
+      <div class="card-header"><span class="card-title">🔝 Biggest overdue amounts</span>
+        <a class="link" onclick="gotoOverdue()">See all ${o.count} →</a></div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>#</th><th>Borrower</th><th>Phone</th><th class="num">Overdue</th><th class="num">Days</th><th class="num">EMIs behind</th><th class="num">Balance left</th><th></th></tr></thead>
+        <tbody>${topRows}</tbody>
+      </table></div>
+    </div>
+    <div class="list-grid three">
+      ${listCard('🚨 Loan period over, money still due', 'lc-danger', pe.count, peHtml,
+        pe.count ? `${money(pe.amount)} still owed · <a onclick="drill({hasPenalty:true, status:'active'})">See all →</a>` : '')}
+      ${listCard('🏁 Loans ending in next 30 days', 'lc-warn', es.count, esHtml, '')}
+      ${listCard('🚫 No payment made yet', 'lc-danger', np.count, npHtml, '')}
+    </div>`;
+}
+
+// ── Tab 4: Showroom & area ──────────────────────────────────────
+function dashGroups(d) {
+  const kinds = [['showroom', '🏪 Showroom', d.by_showroom], ['place', '📍 Place / village', d.by_place], ['vehicle', '🏍 Vehicle type', d.by_vehicle]];
+  const cur = kinds.find(k => k[0] === _dashGroup) || kinds[0];
+  const rows = cur[2] || [];
+  const empties = ['(No showroom)', '(No place)', '(Not entered)'];
+  const tot = rows.reduce((a, r) => ({ loans: a.loans + r.loans, principal: a.principal + r.principal, collected: a.collected + r.collected,
+    running: a.running + r.running, balance: a.balance + r.balance, oc: a.oc + r.overdue_count, oa: a.oa + r.overdue_amount }),
+    { loans: 0, principal: 0, collected: 0, running: 0, balance: 0, oc: 0, oa: 0 });
+  const body = rows.length ? rows.map(r => {
+    const can = !empties.includes(r.name);
+    const risk = pct(r.overdue_count, r.running);
+    return `
+    <tr ${can ? `onclick="drillGroup('${cur[0]}', this.dataset.name)" data-name="${esc(r.name)}" title="See these borrowers"` : 'class="no-click"'}>
+      <td><strong>${esc(r.name)}</strong></td>
+      <td class="num">${r.loans}</td>
+      <td class="num">${money(r.principal)}</td>
+      <td class="num">${money(r.collected)}</td>
+      <td class="num">${r.running}</td>
+      <td class="num">${money(r.balance)}</td>
+      <td class="num ${r.overdue_count ? 't-danger' : ''}">${r.overdue_count ? `${r.overdue_count} · ${money(r.overdue_amount)}` : '—'}</td>
+      <td class="num"><span class="risk-pill ${risk >= 50 ? 'r-high' : risk >= 25 ? 'r-mid' : 'r-low'}">${r.running ? risk + '%' : '—'}</span></td>
+    </tr>`;
+  }).join('') : `<tr class="no-data"><td colspan="8">No data</td></tr>`;
+
+  return `
+    <div class="seg">
+      ${kinds.map(k => `<button class="seg-btn ${k[0] === cur[0] ? 'active' : ''}" onclick="_dashGroup='${k[0]}'; renderDashTab()">${k[1]}</button>`).join('')}
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Business by ${cur[1].replace(/^\S+\s/, '').toLowerCase()}</span>
+        <span class="sec-hint">Click a row to see those borrowers · "Risk" = share of running loans that are overdue</span></div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>${cur[1].replace(/^\S+\s/, '')}</th><th class="num">Loans</th><th class="num">Money lent</th><th class="num">Collected</th><th class="num">Running</th><th class="num">Balance left</th><th class="num">Overdue</th><th class="num">Risk</th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr><td>Total</td><td class="num">${tot.loans}</td><td class="num">${money(tot.principal)}</td><td class="num">${money(tot.collected)}</td><td class="num">${tot.running}</td><td class="num">${money(tot.balance)}</td><td class="num">${tot.oc ? `${tot.oc} · ${money(tot.oa)}` : '—'}</td><td class="num">${tot.running ? pct(tot.oc, tot.running) + '%' : '—'}</td></tr></tfoot>
+      </table></div>
+    </div>`;
+}
+
+// ── Hover tooltips for anything with data-tip ───────────────────
+(function initTips() {
+  let tipEl = null;
+  function el() {
+    if (!tipEl) { tipEl = document.createElement('div'); tipEl.className = 'tip hidden'; document.body.appendChild(tipEl); }
+    return tipEl;
+  }
+  document.addEventListener('mouseover', e => {
+    const t = e.target.closest && e.target.closest('[data-tip]');
+    if (!t) { if (tipEl) tipEl.classList.add('hidden'); return; }
+    const box = el();
+    if (t.dataset.tipHtml) box.innerHTML = t.dataset.tip;   // already escaped when built
+    else box.textContent = t.dataset.tip;
+    box.classList.remove('hidden');
+  });
+  document.addEventListener('mousemove', e => {
+    if (!tipEl || tipEl.classList.contains('hidden')) return;
+    const pad = 14, w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+    let x = e.clientX + pad, y = e.clientY + pad;
+    if (x + w > window.innerWidth - 8) x = e.clientX - w - pad;
+    if (y + h > window.innerHeight - 8) y = e.clientY - h - pad;
+    tipEl.style.left = x + 'px'; tipEl.style.top = y + 'px';
+  });
+  document.addEventListener('scroll', () => { if (tipEl) tipEl.classList.add('hidden'); }, true);
+})();
+
 // ── All Borrowers view ───────────────────────────────────────────
+// One-click preset filters shown as chips above the table. Each one is just
+// a starting set of filters — the full filter panel below still works on top.
+const QUICK_CHIPS = [
+  ['all',      'All',                 {}],
+  ['running',  'Running',             { status: 'active' }],
+  ['overdue',  '⚠ Overdue',           { standing: 'overdue' }],
+  ['duetoday', '📅 Due today',        { due: 'today' }],
+  ['week',     '⏰ Due in 7 days',    { due: 'd7' }],
+  ['pastend',  '🚨 Period over',      { status: 'active', hasPenalty: true }],
+  ['advance',  '⭐ Paid ahead',       { standing: 'advance' }],
+  ['closed',   '✔ Closed',            { status: 'closed' }],
+];
+function chipFilters(key) {
+  const c = QUICK_CHIPS.find(x => x[0] === key);
+  return Object.assign(defaultFilters(), c ? c[2] : {});
+}
+function applyQuickChip(key) {
+  filters = chipFilters(key);
+  _filtersOpen = false;   // a one-click preset never needs the big panel
+  renderBorrowers();
+}
+// Which chip (if any) exactly matches the current filters.
+function activeChipKey() {
+  const cur = JSON.stringify(filters);
+  const hit = QUICK_CHIPS.find(([k]) => JSON.stringify(chipFilters(k)) === cur);
+  return hit ? hit[0] : '';
+}
+
 async function renderBorrowers() {
   const my = _navSeq;
   loading(true);
@@ -1045,8 +1744,18 @@ async function renderBorrowers() {
   let suggestions = {};
   try { suggestions = await api('get_suggestions'); } catch (_) {}
   if (staleNav(my)) return;
+  _bCache = summaries; _bCacheAt = Date.now();
 
   const today = todayISO();
+  // Chip counts use the very same filter predicate as the table.
+  const savedF = filters;
+  const chipCounts = {};
+  for (const [k] of QUICK_CHIPS) {
+    filters = chipFilters(k);
+    chipCounts[k] = summaries.filter(s => passesBorrowerFilter(s, today, '')).length;
+  }
+  filters = savedF;
+  const activeChip = activeChipKey();
   const overdueSummaries = summaries.filter(s => s.is_overdue);
   const dueSoonCount = summaries.filter(s => {
     const d = daysUntilDue(s, today);
@@ -1071,6 +1780,11 @@ async function renderBorrowers() {
         <button class="btn btn-primary" onclick="navigate('add')">➕ New Loan</button>
       </div>
     </div>
+    <div class="chip-row" aria-label="Quick filters">
+      ${QUICK_CHIPS.map(([k, lbl]) => `
+        <button class="qchip ${k === activeChip ? 'active' : ''} qchip-${k}" onclick="applyQuickChip('${k}')">
+          ${lbl}<span class="qchip-n">${chipCounts[k]}</span></button>`).join('')}
+    </div>
     <div class="search-row">
       <input class="search-input" id="borrow-search" type="text"
         placeholder="Search name, phone, vehicle, book, key / engine / chassis no…"
@@ -1081,6 +1795,7 @@ async function renderBorrowers() {
         placeholder="🧾 Search receipt no…"
         value="${esc(receiptQuery)}"
         oninput="setReceiptQuery(this.value)" />
+      ${searchQuery || receiptQuery ? `<button class="btn btn-ghost btn-sm" onclick="clearBorrowerSearch()">✕ Clear search</button>` : ''}
       <button class="btn btn-outline btn-sm" onclick="exportBorrowersExcel()"
         title="Save the rows shown (or only the ticked ones) as an Excel (CSV) file in your Downloads folder">
         ⬇ Excel
@@ -1118,6 +1833,11 @@ async function renderBorrowers() {
   window._allSummaries = summaries;
   _selectedIds = new Set();   // fresh selection each time the page is built
   filterBorrowers(searchQuery);
+}
+
+function clearBorrowerSearch() {
+  searchQuery = ''; receiptQuery = '';
+  renderBorrowers();
 }
 
 function setReceiptQuery(v) {
@@ -1389,8 +2109,18 @@ function filterBorrowers(q) {
     });
   }
 
-  document.getElementById('borrow-count').textContent =
-    `Showing ${rows.length} of ${summaries.length} borrowers`;
+  // Totals of exactly what is shown (handy for "how much is out with showroom X").
+  const tot = f => rows.reduce((t, s) => t + (f(s) || 0), 0);
+  document.getElementById('borrow-count').innerHTML =
+    `Showing ${rows.length} of ${summaries.length} borrowers` +
+    `<span class="tb-sep">·</span>Principal <b>${money(tot(s => s.loan_amount))}</b>` +
+    `<span class="tb-sep">·</span>Paid <b>${money(tot(s => s.total_paid))}</b>` +
+    `<span class="tb-sep">·</span>Remaining <b>${money(tot(s => s.closed ? 0 : s.remaining))}</b>` +
+    `<span class="tb-sep">·</span>Overdue <b style="color:var(--danger)">${money(tot(s => s.is_overdue ? s.overdue_amount : 0))}</b>`;
+  // Keep the quick-filter chips in step with the filter panel.
+  const ak = activeChipKey();
+  document.querySelectorAll('.qchip').forEach(el =>
+    el.classList.toggle('active', !!ak && el.classList.contains('qchip-' + ak)));
   updateActiveFilterCount();
   updateSortCarets();
   updateSelectAllState(rows);
@@ -1529,7 +2259,8 @@ function renderFilterPanel(sug) {
   const sel = (cur, val) => cur === val ? 'selected' : '';
   // Open the panel automatically if any filter is already active, otherwise
   // keep it collapsed so the table isn't pushed down by the big panel.
-  if (activeFilterParts().length > 0) _filtersOpen = true;
+  // A plain quick-chip preset keeps it closed (the chip already shows it).
+  if (activeFilterParts().length > 0 && !activeChipKey()) _filtersOpen = true;
   const open = _filtersOpen;
   return `
   <div class="filter-panel ${open ? 'open' : 'collapsed'}" id="filter-panel">
@@ -2578,6 +3309,7 @@ async function showDetail(borrowerId) {
         <div class="summary-row"><span class="summary-key">Penalties Paid</span><span class="summary-val">${money(s.total_penalties)}</span></div>
         <div class="summary-row"><span class="summary-key">Seizing Money</span><span class="summary-val">${money(s.total_seizings || 0)}</span></div>
         <div class="summary-row"><span class="summary-key">Last Payment</span><span class="summary-val">${fmtDate(s.last_payment_date) || '—'}</span></div>
+        <div class="summary-row"><span class="summary-key">Next Installment</span><span class="summary-val">${nextInstallmentText(s)}</span></div>
         ${data.settle ? `<div class="summary-row" title="If the borrower wants to close the whole loan today: principal + interest only for the days used so far, minus what is already paid.">
           <span class="summary-key">To Close Loan Today ⓘ</span><span class="summary-val primary">${money(data.settle.still)}</span></div>` : ''}
       </div>
@@ -2634,6 +3366,16 @@ async function showDetail(borrowerId) {
   `;
 
   openModal();
+}
+
+// "Today ✓ paid" / "Tomorrow" / "05-12-26 (in 9 days)" / "Loan period over".
+function nextInstallmentText(s) {
+  if (s.closed) return '—';
+  const du = daysUntilDue(s);
+  if (du === null) return 'Loan period over';
+  if (du === 0) return s.due_today_paid ? 'Today — ✓ paid' : `Today — ${money(s.installment_amount)}`;
+  if (du === 1) return `Tomorrow — ${money(s.installment_amount)}`;
+  return `${fmtDate(nextDueDateFor(s))} (in ${du} days)`;
 }
 
 function infoRow(key, val, valClass) {
@@ -3627,6 +4369,251 @@ async function selectPortfolioMonth(ym) {
   slot.innerHTML = renderMonthSection(m);
 }
 
+// ── Collections (day book) ───────────────────────────────────────
+// Every payment / penalty / seizing entry between two dates, across all
+// borrowers, with totals by type, by payment mode and by day.
+const COL_PRESETS = [
+  ['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'Last 7 days'],
+  ['month', 'This month'], ['lastmonth', 'Last month'], ['all', 'All time'], ['custom', 'Pick dates…'],
+];
+let _col = { preset: 'today', from: '', to: '', kind: 'all', mode: '', showroom: '', q: '' };
+let _colData = null;
+
+function colRange(preset) {
+  const t = todayISO();
+  const [y, m] = t.split('-').map(Number);
+  const first = `${y}-${String(m).padStart(2, '0')}-01`;
+  switch (preset) {
+    case 'today': return [t, t];
+    case 'yesterday': { const d = addDaysISO(t, -1); return [d, d]; }
+    case 'week': return [addDaysISO(t, -6), t];
+    case 'month': return [first, t];
+    case 'lastmonth': {
+      const lastEnd = addDaysISO(first, -1);
+      return [lastEnd.slice(0, 8) + '01', lastEnd];
+    }
+    case 'all': return ['1900-01-01', t];
+    default: return [_col.from || t, _col.to || t];
+  }
+}
+
+// Open the Collections screen on a preset (used by Dashboard cards).
+function openCollections(preset) {
+  _col = { preset: preset || 'today', from: '', to: '', kind: 'all', mode: '', showroom: '', q: '' };
+  navigate('collections');
+}
+
+async function renderCollections() {
+  const [from, to] = colRange(_col.preset);
+  _col.from = from; _col.to = to;
+  const my = _navSeq;
+  loading(true);
+  let r;
+  try { r = await api('get_collections', from, to); }
+  finally { loading(false); }
+  if (staleNav(my)) return;
+  if (!r || !r.success) { renderErrorState(r && r.error); return; }
+  _colData = r;
+  const showrooms = [...new Set(r.rows.map(x => (x.showroom || '').trim()).filter(Boolean))].sort();
+  const rangeLbl = from === to ? fmtDate(from) : (_col.preset === 'all' ? 'All time' : `${fmtDate(from)} → ${fmtDate(to)}`);
+
+  document.getElementById('view').innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-title">🧾 Collections — Day Book</div>
+        <div class="page-subtitle">Every payment received, from every borrower, by date · <b>${rangeLbl}</b></div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" onclick="openRecordPayment()">₹ Record Payment</button>
+        <button class="btn btn-outline" onclick="exportCollectionsExcel()" title="Save the rows shown as an Excel (CSV) file in Downloads">⬇ Excel</button>
+        <button class="btn btn-outline" onclick="printCollections()" title="Print or save as PDF">🖨 Print</button>
+      </div>
+    </div>
+    <div class="chip-row">
+      ${COL_PRESETS.map(([k, l]) => `<button class="qchip ${_col.preset === k ? 'active' : ''}" onclick="setColPreset('${k}')">${l}</button>`).join('')}
+    </div>
+    <div class="col-custom ${_col.preset === 'custom' ? '' : 'hidden'}">
+      <label>From</label>
+      <div class="date-field"><input class="form-control" id="col-from" type="text" maxlength="10" placeholder="dd-mm-yy"
+        value="${esc(fmtDate(from))}" oninput="validateDateInput(this)" /><button type="button" class="date-pick-btn" onclick="openDatePicker(this)" title="Pick from calendar">📅</button></div>
+      <label>To</label>
+      <div class="date-field"><input class="form-control" id="col-to" type="text" maxlength="10" placeholder="dd-mm-yy"
+        value="${esc(fmtDate(to))}" oninput="validateDateInput(this)" /><button type="button" class="date-pick-btn" onclick="openDatePicker(this)" title="Pick from calendar">📅</button></div>
+      <button class="btn btn-primary btn-sm" onclick="applyColCustom()">Show</button>
+    </div>
+    <div class="col-filters">
+      <select class="filter-select" onchange="_col.kind=this.value; drawCollections()" title="What kind of entries to show">
+        <option value="all" ${_col.kind === 'all' ? 'selected' : ''}>All entries</option>
+        <option value="payment" ${_col.kind === 'payment' ? 'selected' : ''}>💵 Installment payments only</option>
+        <option value="penalty" ${_col.kind === 'penalty' ? 'selected' : ''}>⚠ Penalties only</option>
+        <option value="seizing" ${_col.kind === 'seizing' ? 'selected' : ''}>🚚 Seizing spent only</option>
+      </select>
+      <select class="filter-select" onchange="_col.mode=this.value; drawCollections()" title="Payment mode">
+        <option value="">Any payment mode</option>
+        ${PAYMENT_MODES.map(m => `<option value="${m.value}" ${_col.mode === m.value ? 'selected' : ''}>${m.icon} ${m.label}</option>`).join('')}
+        <option value="__none" ${_col.mode === '__none' ? 'selected' : ''}>Mode not recorded</option>
+      </select>
+      <select class="filter-select" onchange="_col.showroom=this.value; drawCollections()" title="Borrower's showroom">
+        <option value="">Any showroom</option>
+        ${showrooms.map(v => `<option value="${esc(v)}" ${_col.showroom === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+      </select>
+      <input class="search-input" id="col-q" type="text" placeholder="Search name, book no, receipt…" value="${esc(_col.q)}"
+        oninput="_col.q=this.value; drawCollections()" />
+    </div>
+    <div id="col-body"></div>`;
+  drawCollections();
+}
+
+function setColPreset(k) {
+  _col.preset = k;
+  if (k === 'custom') {
+    // Just reveal the date boxes; keep the current range until "Show" is clicked.
+    document.querySelectorAll('.chip-row .qchip').forEach((el, i) => el.classList.toggle('active', COL_PRESETS[i][0] === k));
+    const box = document.querySelector('.col-custom');
+    if (box) box.classList.remove('hidden');
+    return;
+  }
+  renderCollections();
+}
+function applyColCustom() {
+  const f = parseUserDate(document.getElementById('col-from').value);
+  const t = parseUserDate(document.getElementById('col-to').value);
+  if (!f || !t) { toast('Please enter both dates as dd-mm-yy.', 'error'); return; }
+  _col.preset = 'custom';
+  _col.from = f <= t ? f : t; _col.to = f <= t ? t : f;
+  renderCollections();
+}
+
+function colFilteredRows() {
+  const rows = (_colData && _colData.rows) || [];
+  const q = (_col.q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  return rows.filter(x => {
+    if (_col.kind !== 'all' && x.kind !== _col.kind) return false;
+    if (_col.mode) {
+      if (x.kind !== 'payment') return false;
+      if (_col.mode === '__none' ? !!x.mode : x.mode !== _col.mode) return false;
+    }
+    if (_col.showroom && (x.showroom || '').trim() !== _col.showroom) return false;
+    if (q.length) {
+      const hay = [x.name, x.book_ref, x.receipt_no, x.phone, x.notes, x.address].map(v => (v || '').toString().toLowerCase());
+      if (!q.every(t => hay.some(h => h.includes(t)))) return false;
+    }
+    return true;
+  });
+}
+
+function drawCollections() {
+  const body = document.getElementById('col-body');
+  if (!body) return;
+  const rows = colFilteredRows();
+  const pays = rows.filter(x => x.kind === 'payment');
+  const pens = rows.filter(x => x.kind === 'penalty');
+  const seiz = rows.filter(x => x.kind === 'seizing');
+  const tot = a => a.reduce((t, x) => t + x.amount, 0);
+  const tPay = tot(pays), tPen = tot(pens), tSeiz = tot(seiz);
+  const tInt = pays.reduce((t, x) => t + (x.interest || 0), 0);
+
+  const byMode = {};
+  pays.forEach(x => { const k = x.mode || 'Not recorded'; byMode[k] = (byMode[k] || 0) + x.amount; });
+  const modeHtml = Object.keys(byMode).length
+    ? Object.entries(byMode).sort((a, b) => b[1] - a[1]).map(([k, v]) =>
+        `<span class="mode-total">${k === 'Not recorded' ? '❔ Not recorded' : modeIconFor(k) + ' ' + esc(k)} <b>${money(v)}</b></span>`).join('')
+    : '<span class="t-muted">No installment payments in this view</span>';
+
+  // Day-by-day totals (newest first) when the range covers more than one day.
+  const days = {};
+  rows.forEach(x => {
+    const d = days[x.date] || (days[x.date] = { n: 0, pay: 0, pen: 0, seiz: 0 });
+    if (x.kind === 'payment') { d.n++; d.pay += x.amount; }
+    else if (x.kind === 'penalty') d.pen += x.amount;
+    else d.seiz += x.amount;
+  });
+  const dayKeys = Object.keys(days).sort().reverse();
+  const dayTable = dayKeys.length > 1 ? `
+    <details class="card table-toggle" ${dayKeys.length <= 31 ? 'open' : ''}>
+      <summary>📅 Day-by-day totals (${dayKeys.length} days)</summary>
+      <div class="table-wrap"><table class="data-table compact">
+        <thead><tr><th>Date</th><th class="num">Payments</th><th class="num">Installments</th><th class="num">Penalties</th><th class="num">Seizing spent</th><th class="num">Net cash in</th></tr></thead>
+        <tbody>${dayKeys.map(k => { const d = days[k]; return `<tr><td>${fmtDate(k)} <span class="t-muted">${new Date(k + 'T00:00').toLocaleDateString('en-IN', { weekday: 'short' })}</span></td><td class="num">${d.n}</td><td class="num">${money(d.pay)}</td><td class="num">${money(d.pen)}</td><td class="num">${money(d.seiz)}</td><td class="num"><b>${money(d.pay + d.pen - d.seiz)}</b></td></tr>`; }).join('')}</tbody>
+      </table></div>
+    </details>` : '';
+
+  const kindPill = { payment: '<span class="pill pill-success">Installment</span>', penalty: '<span class="pill pill-warn">Penalty</span>', seizing: '<span class="pill pill-danger">Seizing spent</span>' };
+  const list = rows.length ? rows.map(x => `
+    <tr onclick="showDetail(${x.borrower_id})" title="Open ${esc(x.name)}">
+      <td>${fmtDate(x.date)}</td>
+      <td>${x.receipt_no ? `<span class="mono">${esc(x.receipt_no)}</span>` : '<span class="t-muted">—</span>'}</td>
+      <td><strong>${esc(x.name)}</strong> ${x.book_ref ? `<span class="book-ref-tag">${esc(x.book_ref)}</span>` : ''}${x.showroom ? `<div class="cell-sub">🏪 ${esc(x.showroom)}</div>` : ''}</td>
+      <td>${kindPill[x.kind]}${x.installment_label ? `<div class="cell-sub">${esc(x.installment_label)}</div>` : ''}</td>
+      <td>${x.kind === 'payment' ? (modePill(x.mode) || '<span class="t-muted">—</span>') : ''}</td>
+      <td class="num"><b class="${x.kind === 'seizing' ? 't-danger' : ''}">${x.kind === 'seizing' ? '−' : ''}${money(x.amount)}</b></td>
+      <td class="cell-notes">${esc(x.notes) || ''}</td>
+    </tr>`).join('')
+    : `<tr class="no-data"><td colspan="7"><div class="nd-big">No entries in this period.</div><div>Pick another date range above.</div></td></tr>`;
+
+  body.innerHTML = `
+    <div class="kpi-grid five">
+      ${kpi({ label: '💵 Installments received', value: money(tPay), sub: `${pays.length} payment${pays.length !== 1 ? 's' : ''}`, cls: 'k-success' })}
+      ${kpi({ label: '📈 Interest part (profit)', value: money(tInt), sub: `principal back ${money(Math.max(0, tPay - tInt))}`, cls: 'k-primary',
+              tip: 'Each payment split into interest and principal using that loan\'s own interest ratio' })}
+      ${kpi({ label: '⚠ Penalties collected', value: money(tPen), sub: `${pens.length} entr${pens.length !== 1 ? 'ies' : 'y'}`, cls: 'k-warn' })}
+      ${kpi({ label: '🚚 Seizing spent', value: money(tSeiz), sub: `${seiz.length} entr${seiz.length !== 1 ? 'ies' : 'y'}`, cls: 'k-danger' })}
+      ${kpi({ label: '🏦 Net cash in', value: money(tPay + tPen - tSeiz), sub: 'installments + penalties − seizing', cls: 'k-violet' })}
+    </div>
+    <div class="card mode-strip"><b>By payment mode:</b> ${modeHtml}</div>
+    ${dayTable}
+    <div class="card">
+      <div class="card-header"><span class="card-title">All entries (${rows.length})</span><span class="sec-hint">Click a row to open the borrower</span></div>
+      <div class="table-wrap table-scroll-full"><table class="data-table">
+        <thead><tr><th>Date</th><th>Receipt</th><th>Borrower</th><th>Type</th><th>Mode</th><th class="num">Amount</th><th>Notes</th></tr></thead>
+        <tbody>${list}</tbody>
+      </table></div>
+    </div>`;
+}
+
+async function exportCollectionsExcel() {
+  const rows = colFilteredRows();
+  if (!rows.length) { toast('Nothing to export in this view.', 'error'); return; }
+  const kindName = { payment: 'Installment', penalty: 'Penalty', seizing: 'Seizing spent' };
+  const headers = ['Date', 'Receipt No', 'Borrower', 'Book No', 'Phone', 'Showroom', 'Type', 'Mode', 'Amount', 'Interest part', 'Installment label', 'Notes'];
+  const data = rows.map(x => [fmtDate(x.date), x.receipt_no || '', x.name, x.book_ref, x.phone, x.showroom,
+    kindName[x.kind], x.mode || '', Math.round(x.kind === 'seizing' ? -x.amount : x.amount),
+    Math.round(x.interest || 0), x.installment_label || '', x.notes || '']);
+  loading(true);
+  let r;
+  try { r = await api('export_rows_csv', 'collections', headers, data); }
+  catch (_) { return; }
+  finally { loading(false); }
+  if (r && r.success) toast(`Saved ${r.count} row(s) → ${r.path}`, 'success');
+  else toast('Export failed: ' + (r && r.error || 'unknown'), 'error');
+}
+
+function printCollections() {
+  const rows = colFilteredRows();
+  if (!rows.length) { toast('Nothing to print in this view.', 'error'); return; }
+  const biz = (window.BUSINESS_NAME || '').trim();
+  const pays = rows.filter(x => x.kind === 'payment'), pens = rows.filter(x => x.kind === 'penalty'), seiz = rows.filter(x => x.kind === 'seizing');
+  const tot = a => a.reduce((t, x) => t + x.amount, 0);
+  const range = _col.from === _col.to ? fmtDate(_col.from) : (_col.preset === 'all' ? 'All time' : `${fmtDate(_col.from)} to ${fmtDate(_col.to)}`);
+  const kindName = { payment: 'Installment', penalty: 'Penalty', seizing: 'Seizing spent' };
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Collections ${esc(range)}</title>
+  <style>@page{size:A4;margin:10mm}body{font:10pt 'Segoe UI','Nirmala UI',Arial,sans-serif;color:#111}
+  h1{font-size:15pt;margin:0}.meta{color:#555;margin:2px 0 10px}.tot{display:flex;gap:18px;margin:8px 0 12px;flex-wrap:wrap}
+  .tot div{border:1px solid #bbb;border-radius:6px;padding:6px 10px}table{width:100%;border-collapse:collapse}
+  th,td{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left}th{background:#f0f0f0}td.n,th.n{text-align:right}
+  .toolbar{margin-bottom:10px}@media print{.toolbar{display:none}}</style></head><body>
+  <div class="toolbar"><button onclick="window.print()">🖨 Print / Save as PDF</button> <button onclick="window.close()">Close</button></div>
+  <h1>${biz ? esc(biz) + ' — ' : ''}Collections</h1><div class="meta">${esc(range)} · printed ${fmtDate(todayISO())}</div>
+  <div class="tot"><div>Installments: <b>${money(tot(pays))}</b> (${pays.length})</div><div>Penalties: <b>${money(tot(pens))}</b></div>
+  <div>Seizing spent: <b>${money(tot(seiz))}</b></div><div>Net cash in: <b>${money(tot(pays) + tot(pens) - tot(seiz))}</b></div></div>
+  <table><thead><tr><th>#</th><th>Date</th><th>Receipt</th><th>Borrower</th><th>Book</th><th>Type</th><th>Mode</th><th class="n">Amount</th></tr></thead><tbody>
+  ${rows.map((x, i) => `<tr><td>${i + 1}</td><td>${fmtDate(x.date)}</td><td>${esc(x.receipt_no || '')}</td><td>${esc(x.name)}</td><td>${esc(x.book_ref)}</td><td>${kindName[x.kind]}</td><td>${esc(x.mode || '')}</td><td class="n">${x.kind === 'seizing' ? '−' : ''}${money(x.amount)}</td></tr>`).join('')}
+  </tbody></table><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),300));<\/script></body></html>`;
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (!win) { toast('Pop-up blocked. Allow pop-ups for this app and try again.', 'error'); return; }
+  win.document.open(); win.document.write(html); win.document.close();
+}
+
 // ── Payment Schedule modal ───────────────────────────────────────
 async function showPaymentSchedule(borrowerId) {
   loading(true);
@@ -3700,6 +4687,15 @@ window.addEventListener('DOMContentLoaded', () => {
   refreshHasPassword();   // load password state so delete prompts know whether to ask
   loadAppSettings();      // text size + business name
   navigate('dashboard');
+});
+
+// Enter / Space on a clickable card (role=button) works like a click.
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.getAttribute &&
+      e.target.getAttribute('role') === 'button' && e.target.tagName !== 'BUTTON') {
+    e.preventDefault();
+    e.target.click();
+  }
 });
 
 // Prevent mouse-wheel from silently changing a focused number input.

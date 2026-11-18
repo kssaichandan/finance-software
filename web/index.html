@@ -17,10 +17,16 @@
         <span class="brand-icon">₹</span>
         <span class="brand-name">Finance<br>Tracker</span>
       </div>
+      <div class="sidebar-cta">
+        <button class="cta-pay" onclick="openRecordPayment()" title="Record money received from a borrower">₹ Record Payment</button>
+      </div>
       <div class="sidebar-search">
-        <input id="global-search" type="text" placeholder="🔍 Find borrower / key no…"
-          title="Search any borrower by name, phone, vehicle, book, key, engine, chassis or serial no — from any screen. Press Enter."
-          onkeydown="if(event.key==='Enter'){ globalSearchGo(this.value); this.value=''; }" />
+        <input id="global-search" type="text" placeholder="🔍 Find borrower / key no…" autocomplete="off"
+          title="Type a name, phone, vehicle, book, key, engine, chassis or serial no — results appear as you type"
+          oninput="globalSearchInput(this.value)"
+          onfocus="globalSearchInput(this.value)"
+          onkeydown="globalSearchKey(event)" />
+        <div id="global-results" class="gs-results hidden"></div>
       </div>
       <nav class="sidebar-nav">
         <a class="nav-item active" data-view="dashboard" onclick="navigate('dashboard')">
@@ -34,6 +40,10 @@
         <a class="nav-item" data-view="add" onclick="navigate('add')">
           <span class="nav-icon">➕</span>
           <span>New Loan</span>
+        </a>
+        <a class="nav-item" data-view="collections" onclick="navigate('collections')">
+          <span class="nav-icon">🧾</span>
+          <span>Collections</span>
         </a>
         <a class="nav-item" data-view="portfolio" onclick="navigate('portfolio')">
           <span class="nav-icon">📈</span>
