@@ -60,7 +60,7 @@ class LoanSummary:
     closed: bool
     book_ref: str
     receipts: list
-    # ── Schedule facts (v1.38) — derived from the SAME due-date schedule as
+    # ── Schedule facts (1.37 Extended) — derived from the SAME due-date schedule as
     # the overdue figures above; they never change any existing number.
     last_due_date: date | None = None      # date of the final installment
     next_due_date: date | None = None      # first installment not yet due (running loans)
@@ -70,6 +70,15 @@ class LoanSummary:
     first_missed_due: date | None = None   # due date of the first unpaid installment
     days_since_missed: int = 0             # today - first_missed_due (0 if none)
     penalty_state: str = ""                # "due" (past end, balance left) | "late" (cleared after end) | ""
+    # ── Extra identity fields (1.37 Extended) — so search can find a borrower
+    # by key / engine / chassis / serial number or any of their phone numbers.
+    phone2: str = ""
+    guarantor_phone: str = ""
+    guarantor_phone2: str = ""
+    key_no: str = ""
+    engine_no: str = ""
+    chassis_no: str = ""
+    serial_no: str = ""
 
     @property
     def is_overdue(self) -> bool:
@@ -225,7 +234,23 @@ def compute_summary(borrower_row, today: date | None = None,
         first_missed_due=first_missed,
         days_since_missed=days_since_missed,
         penalty_state=penalty_state,
+        phone2=_col(b, "phone2"),
+        guarantor_phone=_col(b, "guarantor_phone"),
+        guarantor_phone2=_col(b, "guarantor_phone2"),
+        key_no=_col(b, "key_no"),
+        engine_no=_col(b, "engine_no"),
+        chassis_no=_col(b, "chassis_no"),
+        serial_no=_col(b, "serial_no"),
     )
+
+
+def _col(row, key: str) -> str:
+    """Text column value or '' (missing column on a very old DB, or NULL)."""
+    try:
+        v = row[key]
+    except (IndexError, KeyError):
+        return ""
+    return str(v) if v is not None else ""
 
 
 def settle_today_amount(s: "LoanSummary", today: date | None = None) -> dict:

@@ -13,57 +13,53 @@
 
     <!-- Sidebar -->
     <aside class="sidebar">
-      <div class="sidebar-brand" onclick="navigate('dashboard')" title="Go to Dashboard">
+      <div class="sidebar-brand">
         <span class="brand-icon">₹</span>
         <span class="brand-name">Finance<br>Tracker</span>
       </div>
       <div class="sidebar-cta">
-        <button class="cta-pay" onclick="openRecordPayment()" title="Record money received from a borrower">
-          <span class="cta-icon">₹</span><span class="cta-text">Record Payment</span>
-        </button>
+        <button class="cta-pay" onclick="openRecordPayment()" title="Record money received from a borrower">₹ Record Payment</button>
       </div>
       <div class="sidebar-search">
-        <input id="global-search" type="text" placeholder="🔍 Find borrower…" autocomplete="off"
-          title="Type a name, phone, vehicle no or book no — results appear as you type"
+        <input id="global-search" type="text" placeholder="🔍 Find borrower / key no…" autocomplete="off"
+          title="Type a name, phone, vehicle, book, key, engine, chassis or serial no — results appear as you type"
           oninput="globalSearchInput(this.value)"
           onfocus="globalSearchInput(this.value)"
           onkeydown="globalSearchKey(event)" />
         <div id="global-results" class="gs-results hidden"></div>
       </div>
       <nav class="sidebar-nav">
-        <a class="nav-item active" data-view="dashboard" onclick="navigate('dashboard')" title="Today's work and business overview">
-          <span class="nav-icon">🏠</span>
+        <a class="nav-item active" data-view="dashboard" onclick="navigate('dashboard')">
+          <span class="nav-icon">📋</span>
           <span>Dashboard</span>
         </a>
-        <a class="nav-item" data-view="borrowers" onclick="navigate('borrowers')" title="All borrowers, search and filters">
+        <a class="nav-item" data-view="borrowers" onclick="navigate('borrowers')">
           <span class="nav-icon">👥</span>
           <span>Borrowers</span>
         </a>
-        <a class="nav-item" data-view="add" onclick="navigate('add')" title="Give a new loan">
+        <a class="nav-item" data-view="add" onclick="navigate('add')">
           <span class="nav-icon">➕</span>
           <span>New Loan</span>
         </a>
-        <a class="nav-item" data-view="collections" onclick="navigate('collections')" title="Day book — every payment received, by date">
+        <a class="nav-item" data-view="collections" onclick="navigate('collections')">
           <span class="nav-icon">🧾</span>
           <span>Collections</span>
         </a>
-        <a class="nav-item" data-view="portfolio" onclick="navigate('portfolio')" title="Full lending-book summary">
+        <a class="nav-item" data-view="portfolio" onclick="navigate('portfolio')">
           <span class="nav-icon">📈</span>
           <span>Portfolio</span>
         </a>
-        <div class="nav-sep"></div>
-        <a class="nav-item" data-view="settings" onclick="navigate('settings')" title="Business name, text size, backup, password">
-          <span class="nav-icon">⚙️</span>
-          <span>Settings</span>
-        </a>
-        <a class="nav-item" data-view="help" onclick="navigate('help')" title="How to use this app">
+        <a class="nav-item" data-view="help" onclick="navigate('help')">
           <span class="nav-icon">❓</span>
           <span>Help</span>
         </a>
+        <a class="nav-item" data-view="settings" onclick="navigate('settings')">
+          <span class="nav-icon">⚙</span>
+          <span>Settings</span>
+        </a>
       </nav>
       <div class="sidebar-footer">
-        <div class="sidebar-date" id="sidebar-date"></div>
-        <button class="sidebar-refresh" onclick="refreshCurrentView()" title="Reload this screen (F5)">⟳ Refresh</button>
+        <button class="sidebar-refresh" onclick="refreshCurrentView()">⟳ Refresh</button>
       </div>
     </aside>
 

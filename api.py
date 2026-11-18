@@ -209,6 +209,15 @@ def _summary(s: models.LoanSummary) -> dict:
         "first_missed_due": _iso(s.first_missed_due),
         "days_since_missed": s.days_since_missed,
         "penalty_state": s.penalty_state,
+        # Extra identity fields — search by key / engine / chassis / serial no
+        # or any phone number (1.37 Extended).
+        "phone2": s.phone2,
+        "guarantor_phone": s.guarantor_phone,
+        "guarantor_phone2": s.guarantor_phone2,
+        "key_no": s.key_no,
+        "engine_no": s.engine_no,
+        "chassis_no": s.chassis_no,
+        "serial_no": s.serial_no,
     }
 
 
@@ -491,6 +500,7 @@ class API:
             "overdue": {
                 "count": len(overdue),
                 "amount": sum(s.overdue_amount for s in overdue),
+                "over10": sum(1 for s in overdue if s.days_overdue > 10),
                 "buckets": buckets,
                 "behind": behind,
                 "top": [_brief(s) for s in overdue[:12]],
